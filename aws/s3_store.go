@@ -2,17 +2,21 @@ package aws
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"time"
 
-	"github.com/minio/minio-go"
+	"github.com/minio/minio-go/v7"
+	"github.com/minio/minio-go/v7/pkg/credentials"
 	"golang.org/x/sync/semaphore"
 
 	"github.com/akmistry/cloud-util"
 )
+
+var flagS3DisableTls = flag.Bool("s3-disable-tls", false, "Disable TLS for S3")
 
 const maxPendingFetches = 512
 
@@ -27,16 +31,21 @@ func NewDefaultS3Store(bucket string) *S3Store {
 }
 
 func NewS3Store(endpoint, accessKey, secret, region, bucket string) *S3Store {
-	client, err := minio.New(endpoint, accessKey, secret, false)
-	if err != nil {
-		panic(err)
-	}
-	client.SetCustomTransport(&http.Transport{
+	transport := &http.Transport{
 		MaxIdleConnsPerHost:   1024,
 		IdleConnTimeout:       90 * time.Second,
 		ExpectContinueTimeout: 1 * time.Second,
 		DisableCompression:    true,
-	})
+	}
+	options := &minio.Options{
+		Creds:     credentials.NewStaticV4(accessKey, secret, ""),
+		Secure:    !*flagS3DisableTls,
+		Transport: transport,
+	}
+	client, err := minio.New(endpoint, options)
+	if err != nil {
+		panic(err)
+	}
 	return &S3Store{
 		client:      client,
 		bucket:      bucket,
@@ -44,11 +53,11 @@ func NewS3Store(endpoint, accessKey, secret, region, bucket string) *S3Store {
 	}
 }
 
-func (s *S3Store) Size(hash string) (int64, error) {
+func (s *S3Store) Size(name string) (int64, error) {
 	s.pendingSema.Acquire(context.Background(), 1)
 	defer s.pendingSema.Release(1)
 
-	info, err := s.client.StatObject(s.bucket, hash)
+	info, err := s.client.StatObject(context.TODO(), s.bucket, name, minio.StatObjectOptions{})
 	if errResp, ok := err.(minio.ErrorResponse); ok && errResp.Code == "NoSuchKey" {
 		return 0, os.ErrNotExist
 	} else if err != nil {
@@ -59,7 +68,7 @@ func (s *S3Store) Size(hash string) (int64, error) {
 
 type getReader struct {
 	s    *S3Store
-	hash string
+	name string
 	size int64
 }
 
@@ -79,7 +88,7 @@ func (r *getReader) ReadAt(b []byte, off int64) (int, error) {
 	r.s.pendingSema.Acquire(context.Background(), 1)
 	defer r.s.pendingSema.Release(1)
 
-	obj, err := r.s.client.GetObject(r.s.bucket, r.hash)
+	obj, err := r.s.client.GetObject(context.TODO(), r.s.bucket, r.name, minio.GetObjectOptions{})
 	if errResp, ok := err.(minio.ErrorResponse); ok && errResp.Code == "NoSuchKey" {
 		return 0, os.ErrNotExist
 	} else if err != nil {
@@ -89,12 +98,16 @@ func (r *getReader) ReadAt(b []byte, off int64) (int, error) {
 	return obj.ReadAt(b, off)
 }
 
-func (s *S3Store) Get(hash string) (cloud.GetReader, error) {
-	size, err := s.Size(hash)
+func (r *getReader) Close() error {
+	return nil
+}
+
+func (s *S3Store) Get(name string) (cloud.GetReader, error) {
+	size, err := s.Size(name)
 	if err != nil {
 		return nil, err
 	}
-	r := &getReader{s: s, hash: hash, size: size}
+	r := &getReader{s: s, name: name, size: size}
 	return r, nil
 }
 
@@ -147,7 +160,7 @@ type result struct {
 	err error
 }
 
-func (s *S3Store) Put(hash string) (cloud.PutWriter, error) {
+func (s *S3Store) Put(name string) (cloud.PutWriter, error) {
 	s.pendingSema.Acquire(context.Background(), 1)
 	r, pw := io.Pipe()
 	writer := &putWriter{s: s, pw: pw, result: make(chan result, 1)}
@@ -155,8 +168,11 @@ func (s *S3Store) Put(hash string) (cloud.PutWriter, error) {
 		defer close(writer.result)
 		defer s.pendingSema.Release(1)
 
-		n, err := s.client.PutObject(s.bucket, hash, r, "application/octet-stream")
-		writer.result <- result{n: n, err: err}
+		opts := minio.PutObjectOptions{
+			ContentType: "application/octet-stream",
+		}
+		info, err := s.client.PutObject(context.TODO(), s.bucket, name, r, -1, opts)
+		writer.result <- result{n: info.Size, err: err}
 	}()
 	return writer, nil
 }
