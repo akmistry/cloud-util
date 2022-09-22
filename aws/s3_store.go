@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"time"
@@ -165,6 +166,7 @@ func (s *S3Store) Put(name string) (cloud.PutWriter, error) {
 	r, pw := io.Pipe()
 	writer := &putWriter{s: s, pw: pw, result: make(chan result, 1)}
 	go func() {
+		defer r.Close()
 		defer close(writer.result)
 		defer s.pendingSema.Release(1)
 
@@ -172,6 +174,9 @@ func (s *S3Store) Put(name string) (cloud.PutWriter, error) {
 			ContentType: "application/octet-stream",
 		}
 		info, err := s.client.PutObject(context.TODO(), s.bucket, name, r, -1, opts)
+		if err != nil {
+			log.Print("Error putting object: ", err)
+		}
 		writer.result <- result{n: info.Size, err: err}
 	}()
 	return writer, nil
@@ -180,4 +185,13 @@ func (s *S3Store) Put(name string) (cloud.PutWriter, error) {
 func (s *S3Store) Delete(key string) error {
 	panic("unimplemented")
 	return nil
+}
+
+func (s *S3Store) List() ([]string, error) {
+	names := make([]string, 0)
+	iter := s.client.ListObjects(context.TODO(), s.bucket, minio.ListObjectsOptions{})
+	for info := range iter {
+		names = append(names, info.Key)
+	}
+	return names, nil
 }
