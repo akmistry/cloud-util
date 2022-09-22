@@ -107,3 +107,15 @@ func (s *DirBlobStore) Delete(key string) error {
 	path := s.makeFilePath(key)
 	return os.Remove(path)
 }
+
+func (s *DirBlobStore) List() ([]string, error) {
+	dirents, err := os.ReadDir(s.dir)
+	if err != nil {
+		return nil, err
+	}
+	entries := make([]string, 0, len(dirents))
+	for _, d := range dirents {
+		entries = append(entries, d.Name())
+	}
+	return entries, nil
+}

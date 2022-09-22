@@ -14,6 +14,10 @@ type PutWriter interface {
 	Cancel() error
 }
 
+type Lister interface {
+  List() ([]string, error)
+}
+
 type BlobStore interface {
 	Size(key string) (int64, error)
 	Get(key string) (GetReader, error)
