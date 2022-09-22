@@ -182,9 +182,8 @@ func (s *S3Store) Put(name string) (cloud.PutWriter, error) {
 	return writer, nil
 }
 
-func (s *S3Store) Delete(key string) error {
-	panic("unimplemented")
-	return nil
+func (s *S3Store) Delete(name string) error {
+	return s.client.RemoveObject(context.TODO(), s.bucket, name, minio.RemoveObjectOptions{})
 }
 
 func (s *S3Store) List() ([]string, error) {
