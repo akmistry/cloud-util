@@ -1,7 +1,7 @@
 package cloud
 
 import (
-  "fmt"
+	"fmt"
 	"strings"
 
 	"github.com/akmistry/go-util/badgerkv"
@@ -23,9 +23,9 @@ func NewPrefixStore(s store.Store, prefix string) *PrefixStore {
 }
 
 func (s *PrefixStore) makeKey(key string) string {
-  k := s.prefix + key
-  fmt.Println("Making key: ", k)
-  return k
+	k := s.prefix + key
+	fmt.Println("Making key: ", k)
+	return k
 }
 
 func (s *PrefixStore) Close() {

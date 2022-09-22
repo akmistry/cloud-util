@@ -113,6 +113,10 @@ func (r *getReader) ReadAt(b []byte, off int64) (int, error) {
 	return n, nil
 }
 
+func (r *getReader) Close() error {
+	return nil
+}
+
 func (s *GcsStore) Get(key string) (cloud.GetReader, error) {
 	size, err := s.Size(key)
 	if err != nil {
