@@ -33,7 +33,7 @@ type BlockBlobCache struct {
 }
 
 func NewBlockBlobCache(bs cloud.BlobStore, dir string) (*BlockBlobCache, error) {
-	err := os.MkdirAll(filepath.Join(dir, blocksDir), 0644)
+	err := os.MkdirAll(filepath.Join(dir, blocksDir), 0755)
 	if err != nil {
 		return nil, err
 	}
@@ -103,6 +103,13 @@ func (c *BlockBlobCache) getBlockReader(key string, block int64, br cloud.GetRea
 	err = os.Rename(f.Name(), name)
 	if err != nil {
 		log.Printf("Unable to rename %s to %s: %v", f.Name(), name, err)
+	}
+	fi, err := f.Stat()
+	if err == nil {
+		err = f.Chmod(fi.Mode() | 0644)
+	}
+	if err != nil {
+		log.Printf("Unable to stat or chown %s: %v", f.Name(), err)
 	}
 
 	return f, nil
