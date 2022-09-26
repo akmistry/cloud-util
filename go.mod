@@ -3,14 +3,12 @@ module github.com/akmistry/cloud-util
 go 1.19
 
 require (
-	cloud.google.com/go/datastore v1.8.0
 	cloud.google.com/go/storage v1.26.0
 	github.com/akmistry/go-util v0.0.0-20220826051432-1e3e533181fe
 	github.com/docker/libkv v0.2.1
 	github.com/minio/minio-go/v7 v7.0.37
 	github.com/prometheus/client_golang v1.13.0
 	golang.org/x/sync v0.0.0-20220907140024-f12130a52804
-	google.golang.org/api v0.94.0
 )
 
 require (
@@ -51,6 +49,7 @@ require (
 	golang.org/x/sys v0.0.0-20220919091848-fb04ddd9f9c8 // indirect
 	golang.org/x/text v0.3.7 // indirect
 	golang.org/x/xerrors v0.0.0-20220609144429-65e65417b02f // indirect
+	google.golang.org/api v0.94.0 // indirect
 	google.golang.org/appengine v1.6.7 // indirect
 	google.golang.org/genproto v0.0.0-20220810155839-1856144b1d9c // indirect
 	google.golang.org/grpc v1.48.0 // indirect
