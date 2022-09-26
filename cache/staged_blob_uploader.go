@@ -13,41 +13,47 @@ import (
 	"github.com/akmistry/cloud-util"
 )
 
+const (
+	tempPrefix      = "temp-"
+	pendingPrefix   = "pending-"
+	completedPrefix = "completed-"
+)
+
 type StagedBlobUploader struct {
-	pendingDir   string
-	completedDir string
+	dir          string
 	backing      cloud.BlobStore
 	pendingBlobs map[string]bool
 	lock         sync.Mutex
 }
 
 func NewStagedBlobUploader(bs cloud.BlobStore, dir string) (*StagedBlobUploader, error) {
-	pendingDir := filepath.Join(dir, "pending")
-	completedDir := filepath.Join(dir, "pending")
-	err := os.MkdirAll(pendingDir, 0755)
-	if err != nil {
-		return nil, err
-	}
-	err = os.MkdirAll(completedDir, 0755)
+	err := os.MkdirAll(dir, 0755)
 	if err != nil {
 		return nil, err
 	}
 
-	dirents, err := os.ReadDir(pendingDir)
+	dirents, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, err
 	}
 	pendingBlobs := make(map[string]bool, len(dirents))
 	for _, e := range dirents {
-		if strings.HasPrefix(e.Name(), "blob-temp") {
+		if strings.HasPrefix(e.Name(), tempPrefix) {
+			log.Printf("Deleting temp file %s", e.Name())
+			err = os.Remove(filepath.Join(dir, e.Name()))
+			if err != nil {
+				log.Printf("Error removing temp file %s: %v", e.Name(), err)
+			}
+			continue
+		} else if !strings.HasPrefix(e.Name(), pendingPrefix) {
 			continue
 		}
-		pendingBlobs[e.Name()] = true
+		key := strings.TrimPrefix(e.Name(), pendingPrefix)
+		pendingBlobs[key] = true
 	}
 
 	u := &StagedBlobUploader{
-		pendingDir:   pendingDir,
-		completedDir: completedDir,
+		dir:          dir,
 		backing:      bs,
 		pendingBlobs: pendingBlobs,
 	}
@@ -57,6 +63,14 @@ func NewStagedBlobUploader(bs cloud.BlobStore, dir string) (*StagedBlobUploader,
 	return u, nil
 }
 
+func (u *StagedBlobUploader) makePendingName(key string) string {
+	return filepath.Join(u.dir, pendingPrefix+key)
+}
+
+func (u *StagedBlobUploader) makeCompletedName(key string) string {
+	return filepath.Join(u.dir, completedPrefix+key)
+}
+
 func (u *StagedBlobUploader) doBlobUpload(key string) {
 	startTime := time.Now()
 	defer func() {
@@ -64,12 +78,35 @@ func (u *StagedBlobUploader) doBlobUpload(key string) {
 	}()
 	log.Printf("Uploading %s", key)
 
-	pendingName := filepath.Join(u.pendingDir, key)
+	pendingName := u.makePendingName(key)
 	f, err := os.Open(pendingName)
 	if err != nil {
 		panic(err)
 	}
 	defer f.Close()
+
+	fi, err := f.Stat()
+	if err != nil {
+		panic(err)
+	}
+
+	size, err := u.backing.Size(key)
+	if err == nil {
+		if size == fi.Size() {
+			err = os.Rename(pendingName, u.makeCompletedName(key))
+			if err != nil {
+				panic(err)
+			}
+			return
+		}
+		log.Printf("Uploaded blob %s size %d != pending size %d", key, size, fi.Size())
+		log.Print("Deleting blob and re-uploading")
+		err = u.backing.Delete(key)
+		if err != nil {
+			panic(err)
+		}
+	}
+	// TODO: Handle other errors other than os.ErrNotExist
 
 	w, err := u.backing.Put(key)
 	if err != nil {
@@ -85,19 +122,19 @@ func (u *StagedBlobUploader) doBlobUpload(key string) {
 		w.Cancel()
 		panic(err)
 	}
-	err = os.Rename(pendingName, filepath.Join(u.completedDir, key))
+	err = os.Rename(pendingName, u.makeCompletedName(key))
 	if err != nil {
 		panic(err)
 	}
 }
 
 func (u *StagedBlobUploader) findStagedBlob(key string) string {
-	completedName := filepath.Join(u.completedDir, key)
+	completedName := u.makeCompletedName(key)
 	_, err := os.Stat(completedName)
 	if err == nil {
 		return completedName
 	}
-	pendingName := filepath.Join(u.pendingDir, key)
+	pendingName := u.makePendingName(key)
 	_, err = os.Stat(pendingName)
 	if err == nil {
 		return pendingName
@@ -193,8 +230,7 @@ func (w *pendingWriter) Close() (err error) {
 		return
 	}
 
-	completedName := filepath.Join(w.u.completedDir, w.key)
-	err = os.Rename(w.f.Name(), completedName)
+	err = os.Rename(w.f.Name(), w.u.makePendingName(w.key))
 	if err != nil {
 		return
 	}
@@ -216,7 +252,7 @@ func (w *pendingWriter) Cancel() error {
 
 func (u *StagedBlobUploader) Put(key string) (cloud.PutWriter, error) {
 	// TODO: Check blob does not already exist
-	f, err := os.CreateTemp(u.pendingDir, "blob-temp*")
+	f, err := os.CreateTemp(u.dir, tempPrefix+"*")
 	if err != nil {
 		return nil, err
 	}
