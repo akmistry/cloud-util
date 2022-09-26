@@ -14,7 +14,6 @@ import (
 
 const (
 	blockSize = 1024 * 1024
-	blocksDir = "blocks"
 )
 
 type cacheBlockReader interface {
@@ -23,9 +22,8 @@ type cacheBlockReader interface {
 }
 
 type BlockBlobCache struct {
-	dir       string
-	blocksDir string
-	backing   cloud.BlobStore
+	dir     string
+	backing cloud.BlobStore
 
 	blobReaderCache map[string]cloud.GetReader
 
@@ -33,14 +31,13 @@ type BlockBlobCache struct {
 }
 
 func NewBlockBlobCache(bs cloud.BlobStore, dir string) (*BlockBlobCache, error) {
-	err := os.MkdirAll(filepath.Join(dir, blocksDir), 0755)
+	err := os.MkdirAll(dir, 0755)
 	if err != nil {
 		return nil, err
 	}
 
 	c := &BlockBlobCache{
 		dir:             dir,
-		blocksDir:       filepath.Join(dir, blocksDir),
 		backing:         bs,
 		blobReaderCache: make(map[string]cloud.GetReader),
 	}
@@ -72,7 +69,7 @@ func (c *BlockBlobCache) makeBlockFilePath(key string, block int64) string {
 	if block%blockSize != 0 {
 		log.Fatalf("block %d %% blockSize %d != 0", block, blockSize)
 	}
-	return filepath.Join(c.blocksDir, fmt.Sprintf("%s-%d", key, block))
+	return filepath.Join(c.dir, fmt.Sprintf("%s-%d", key, block))
 }
 
 func (c *BlockBlobCache) getBlockReader(key string, block int64, br cloud.GetReader) (cacheBlockReader, error) {
@@ -90,7 +87,7 @@ func (c *BlockBlobCache) getBlockReader(key string, block int64, br cloud.GetRea
 	}
 	buf = buf[:n]
 
-	f, err = os.CreateTemp(c.blocksDir, "block-temp*")
+	f, err = os.CreateTemp(c.dir, "block-temp*")
 	if err != nil {
 		return nil, err
 	}

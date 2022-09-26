@@ -1,6 +1,7 @@
 package cache
 
 import (
+	"context"
 	"errors"
 	"io"
 	"log"
@@ -10,6 +11,8 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/sync/semaphore"
+
 	"github.com/akmistry/cloud-util"
 )
 
@@ -17,6 +20,8 @@ const (
 	tempPrefix      = "temp-"
 	pendingPrefix   = "pending-"
 	completedPrefix = "completed-"
+
+	maxActiveUploads = 2
 )
 
 type StagedBlobUploader struct {
@@ -24,6 +29,8 @@ type StagedBlobUploader struct {
 	backing      cloud.BlobStore
 	pendingBlobs map[string]bool
 	lock         sync.Mutex
+
+	activeUploads *semaphore.Weighted
 }
 
 func NewStagedBlobUploader(bs cloud.BlobStore, dir string) (*StagedBlobUploader, error) {
@@ -53,9 +60,10 @@ func NewStagedBlobUploader(bs cloud.BlobStore, dir string) (*StagedBlobUploader,
 	}
 
 	u := &StagedBlobUploader{
-		dir:          dir,
-		backing:      bs,
-		pendingBlobs: pendingBlobs,
+		dir:           dir,
+		backing:       bs,
+		pendingBlobs:  pendingBlobs,
+		activeUploads: semaphore.NewWeighted(maxActiveUploads),
 	}
 	for key := range u.pendingBlobs {
 		go u.doBlobUpload(key)
@@ -72,6 +80,9 @@ func (u *StagedBlobUploader) makeCompletedName(key string) string {
 }
 
 func (u *StagedBlobUploader) doBlobUpload(key string) {
+	u.activeUploads.Acquire(context.Background(), 1)
+	defer u.activeUploads.Release(1)
+
 	startTime := time.Now()
 	defer func() {
 		log.Printf("Uploaded %s in %s", key, time.Since(startTime))
