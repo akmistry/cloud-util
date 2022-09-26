@@ -162,7 +162,38 @@ func (u *StagedBlobUploader) List() ([]string, error) {
 	if !ok {
 		return nil, errors.New("List() unimplemented")
 	}
-	return l.List()
+	list, err := l.List()
+	if err != nil {
+		return list, err
+	}
+
+	dirents, err := os.ReadDir(u.dir)
+	if err != nil {
+		return nil, err
+	}
+	for _, e := range dirents {
+		var key string
+		if strings.HasPrefix(e.Name(), pendingPrefix) {
+			key = strings.TrimPrefix(e.Name(), pendingPrefix)
+		} else if strings.HasPrefix(e.Name(), completedPrefix) {
+			key = strings.TrimPrefix(e.Name(), completedPrefix)
+		} else {
+			continue
+		}
+
+		hasKey := false
+		for _, k := range list {
+			if k == key {
+				hasKey = true
+				break
+			}
+		}
+		if hasKey {
+			continue
+		}
+		list = append(list, key)
+	}
+	return list, nil
 }
 
 func (u *StagedBlobUploader) Delete(key string) error {
