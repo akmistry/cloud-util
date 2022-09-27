@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/hashicorp/golang-lru"
+
 	"github.com/akmistry/cloud-util"
 )
 
@@ -27,13 +29,14 @@ type cacheBlockReader interface {
 type BlockBlobCache struct {
 	dir     string
 	backing cloud.BlobStore
+	lru     *lru.Cache
 
 	blobReaderCache map[string]cloud.GetReader
 
 	lock sync.Mutex
 }
 
-func NewBlockBlobCache(bs cloud.BlobStore, dir string) (*BlockBlobCache, error) {
+func NewBlockBlobCache(bs cloud.BlobStore, dir string, cacheSize int64) (*BlockBlobCache, error) {
 	err := os.MkdirAll(dir, 0755)
 	if err != nil {
 		return nil, err
@@ -44,6 +47,26 @@ func NewBlockBlobCache(bs cloud.BlobStore, dir string) (*BlockBlobCache, error) 
 		backing:         bs,
 		blobReaderCache: make(map[string]cloud.GetReader),
 	}
+
+	evictFunc := func(key interface{}, value interface{}) {
+		path := key.(string)
+		os.Remove(path)
+	}
+	c.lru, err = lru.NewWithEvict(int(cacheSize/blockSize), evictFunc)
+	if err != nil {
+		return nil, err
+	}
+
+	// Populate the cache
+	filepath.WalkDir(c.dir, func(path string, d fs.DirEntry, err error) error {
+		if path == c.dir {
+			return nil
+		} else if d.IsDir() {
+			return fs.SkipDir
+		}
+		c.lru.Add(path, true)
+		return nil
+	})
 
 	return c, nil
 }
@@ -77,6 +100,7 @@ func (c *BlockBlobCache) makeBlockFilePath(key string, block int64) string {
 
 func (c *BlockBlobCache) getBlockReader(key string, block int64, br cloud.GetReader) (cacheBlockReader, error) {
 	name := c.makeBlockFilePath(key, block)
+	c.lru.Add(name, true)
 	f, err := os.Open(name)
 	if err == nil {
 		return f, nil
