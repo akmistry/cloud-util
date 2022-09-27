@@ -4,9 +4,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/akmistry/cloud-util"
@@ -177,6 +180,33 @@ func (c *BlockBlobCache) Get(key string) (cloud.GetReader, error) {
 	return r, nil
 }
 
+func (c *BlockBlobCache) deleteCachedBlocks(key string) {
+	filepath.WalkDir(c.dir, func(path string, d fs.DirEntry, err error) error {
+		if path == c.dir {
+			return nil
+		} else if d.IsDir() {
+			return fs.SkipDir
+		}
+
+		if !strings.HasPrefix(d.Name(), key+"-") {
+			return nil
+		}
+
+		blockOffsetStr := strings.TrimPrefix(d.Name(), key+"-")
+		_, err = strconv.ParseUint(blockOffsetStr, 10, 64)
+		if err != nil {
+			log.Printf("Error parsing block offset '%s': %v", blockOffsetStr, err)
+			return nil
+		}
+
+		err = os.Remove(path)
+		if err != nil {
+			log.Printf("Error removing block file %s: %v", path, err)
+		}
+		return nil
+	})
+}
+
 func (c *BlockBlobCache) Delete(key string) error {
 	c.lock.Lock()
 	br := c.blobReaderCache[key]
@@ -186,6 +216,6 @@ func (c *BlockBlobCache) Delete(key string) error {
 	}
 	c.lock.Unlock()
 
-	// TODO: Clear locally cached blocks
+	c.deleteCachedBlocks(key)
 	return c.backing.Delete(key)
 }
