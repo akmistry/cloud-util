@@ -63,7 +63,11 @@ func NewBlockBlobCache(bs cloud.BlobStore, dir string, cacheSize int64) (*BlockB
 			return nil
 		} else if d.IsDir() {
 			return fs.SkipDir
+		} else if err != nil {
+			log.Printf("Error walking path %s: %v", path, err)
+			return nil
 		}
+
 		c.lru.Add(path, true)
 		return nil
 	})
@@ -210,6 +214,9 @@ func (c *BlockBlobCache) deleteCachedBlocks(key string) {
 			return nil
 		} else if d.IsDir() {
 			return fs.SkipDir
+		} else if err != nil {
+			log.Printf("Error walking path %s: %v", path, err)
+			return nil
 		}
 
 		if !strings.HasPrefix(d.Name(), key+"-") {
