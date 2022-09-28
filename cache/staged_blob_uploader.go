@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"log"
+	"math/rand"
 	"os"
 	"path/filepath"
 	"strings"
@@ -89,53 +90,74 @@ func (u *StagedBlobUploader) doBlobUpload(key string) {
 	}()
 	log.Printf("Uploading %s", key)
 
-	pendingName := u.makePendingName(key)
-	f, err := os.Open(pendingName)
-	if err != nil {
-		panic(err)
-	}
-	defer f.Close()
-
-	fi, err := f.Stat()
-	if err != nil {
-		panic(err)
-	}
-
-	size, err := u.backing.Size(key)
-	if err == nil {
-		if size == fi.Size() {
-			err = os.Rename(pendingName, u.makeCompletedName(key))
-			if err != nil {
-				panic(err)
-			}
-			return
+	backoffs := 0
+	retry := func(err error) {
+		u.activeUploads.Release(1)
+		if backoffs > 8 {
+			backoffs = 8
 		}
-		log.Printf("Uploaded blob %s size %d != pending size %d", key, size, fi.Size())
-		log.Print("Deleting blob and re-uploading")
-		err = u.backing.Delete(key)
+		retryTime := time.Duration(rand.Int63n(int64(time.Second << backoffs)))
+		backoffs++
+		log.Printf("Upload of %s failed with error %v, retyring after %s", key, err, retryTime)
+		time.Sleep(retryTime)
+		u.activeUploads.Acquire(context.Background(), 1)
+	}
+
+	for {
+		pendingName := u.makePendingName(key)
+		f, err := os.Open(pendingName)
 		if err != nil {
 			panic(err)
 		}
-	}
-	// TODO: Handle other errors other than os.ErrNotExist
+		defer f.Close()
 
-	w, err := u.backing.Put(key)
-	if err != nil {
-		panic(err)
-	}
-	_, err = io.Copy(w, f)
-	if err != nil {
-		w.Cancel()
-		panic(err)
-	}
-	err = w.Close()
-	if err != nil {
-		w.Cancel()
-		panic(err)
-	}
-	err = os.Rename(pendingName, u.makeCompletedName(key))
-	if err != nil {
-		panic(err)
+		fi, err := f.Stat()
+		if err != nil {
+			panic(err)
+		}
+
+		size, err := u.backing.Size(key)
+		if err == nil {
+			if size == fi.Size() {
+				err = os.Rename(pendingName, u.makeCompletedName(key))
+				if err != nil {
+					panic(err)
+				}
+				return
+			}
+			log.Printf("Uploaded blob %s size %d != pending size %d", key, size, fi.Size())
+			log.Print("Deleting blob and re-uploading")
+			err = u.backing.Delete(key)
+			if err != nil {
+				retry(err)
+				continue
+			}
+		} else if err != os.ErrNotExist {
+			retry(err)
+			continue
+		}
+
+		w, err := u.backing.Put(key)
+		if err != nil {
+			retry(err)
+			continue
+		}
+		_, err = io.Copy(w, f)
+		if err != nil {
+			w.Cancel()
+			retry(err)
+			continue
+		}
+		err = w.Close()
+		if err != nil {
+			retry(err)
+			continue
+		}
+		err = os.Rename(pendingName, u.makeCompletedName(key))
+		if err != nil {
+			panic(err)
+		}
+		return
 	}
 }
 
