@@ -21,6 +21,12 @@ const (
 	blockSize = 1024 * 1024
 )
 
+var (
+	blockBufPool = sync.Pool{New: func() interface{} {
+		return make([]byte, blockSize)
+	}}
+)
+
 type cacheBlockReader interface {
 	io.ReaderAt
 	io.Closer
@@ -102,7 +108,7 @@ func (c *BlockBlobCache) makeBlockFilePath(key string, block int64) string {
 	return filepath.Join(c.dir, fmt.Sprintf("%s-%d", key, block))
 }
 
-func (c *BlockBlobCache) getBlockReader(key string, block int64, br cloud.GetReader) (cacheBlockReader, error) {
+func (c *BlockBlobCache) getBlockReader(key string, blobSize int64, block int64, br cloud.GetReader) (cacheBlockReader, error) {
 	name := c.makeBlockFilePath(key, block)
 	c.lru.Add(name, true)
 	f, err := os.Open(name)
@@ -111,7 +117,11 @@ func (c *BlockBlobCache) getBlockReader(key string, block int64, br cloud.GetRea
 	}
 
 	// TODO: Ensure the same block isn't downloaded more than once concurrently
-	buf := make([]byte, blockSize)
+	buf := blockBufPool.Get().([]byte)
+	defer blockBufPool.Put(buf)
+	if blockSize > blobSize-block {
+		buf = buf[:int(blobSize-block)]
+	}
 	n, err := br.ReadAt(buf, block)
 	if err != nil && err != io.EOF {
 		return nil, err
@@ -160,24 +170,27 @@ func (r *cacheReader) Close() error {
 func (r *cacheReader) ReadAt(p []byte, off int64) (int, error) {
 	bytesRead := 0
 	for len(p) > 0 {
-		block := off - (off % blockSize)
-		blockOff := off - block
+		blockOff := off % blockSize
+		blockRem := blockSize - blockOff
+		block := off - blockOff
 
-		blockReader, err := r.c.getBlockReader(r.key, block, r.br)
+		blockReader, err := r.c.getBlockReader(r.key, r.br.Size(), block, r.br)
 		if err != nil {
 			return bytesRead, err
 		}
-		n, err := blockReader.ReadAt(p, blockOff)
+		readLen := len(p)
+		if int64(readLen) > blockRem {
+			readLen = int(blockRem)
+		}
+		n, err := blockReader.ReadAt(p[:readLen], blockOff)
 		blockReader.Close()
 		bytesRead += n
 		off += int64(n)
 		p = p[n:]
-		if err != nil && err != io.EOF {
+		if err == io.EOF && n == readLen {
+			err = nil
+		} else if err != nil {
 			return bytesRead, err
-		}
-		// Expect to read the entire block.
-		if len(p) > 0 && off%blockSize != 0 {
-			return bytesRead, io.ErrUnexpectedEOF
 		}
 	}
 	return bytesRead, nil
