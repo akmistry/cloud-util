@@ -6,8 +6,9 @@ import (
 	"io"
 	"log"
 	//"net/http"
+	"errors"
 	"os"
-	//"time"
+	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/credentials"
@@ -18,6 +19,7 @@ import (
 	"golang.org/x/sync/semaphore"
 
 	"github.com/akmistry/cloud-util"
+	"github.com/akmistry/cloud-util/util"
 )
 
 //var flagS3DisableTls = flag.Bool("s3-disable-tls", false, "Disable TLS for S3")
@@ -29,6 +31,10 @@ type GCS3Store struct {
 	bucket      *blob.Bucket
 	pendingSema *semaphore.Weighted
 }
+
+var (
+	ErrWriteCanceled = errors.New("cloud: blob write canceled")
+)
 
 func NewDefaultGCS3Store(bucket string) *GCS3Store {
 	return NewGCS3Store(*Endpoint, *AccessId, *AccessSecret, *Region, bucket)
@@ -139,13 +145,14 @@ func (s *GCS3Store) Get(name string) (cloud.GetReader, error) {
 
 type goCloudPutWriter struct {
 	s      *GCS3Store
-	pw     *io.PipeWriter
 	result chan result
 	closed bool
+
+	buf *util.StagingBuffer
 }
 
 func (w *goCloudPutWriter) Write(b []byte) (int, error) {
-	n, err := w.pw.Write(b)
+	n, err := w.buf.Write(b)
 	if err != nil {
 		err = fmt.Errorf("error writing %d bytes: %v", len(b), err)
 	}
@@ -158,7 +165,7 @@ func (w *goCloudPutWriter) Close() error {
 	}
 	w.closed = true
 
-	w.pw.Close()
+	w.buf.Close()
 
 	res := <-w.result
 	if res.err != nil {
@@ -173,9 +180,7 @@ func (w *goCloudPutWriter) Cancel() error {
 	}
 	w.closed = true
 
-	// TODO: ErrCanceled?
-	w.pw.CloseWithError(io.ErrClosedPipe)
-	w.pw = nil
+	w.buf.CloseWithError(ErrWriteCanceled)
 
 	// TODO: Wait for request completion, and delete the object if success.
 	return nil
@@ -190,30 +195,43 @@ type result struct {
 
 func (s *GCS3Store) Put(name string) (cloud.PutWriter, error) {
 	s.pendingSema.Acquire(context.Background(), 1)
-	r, pw := io.Pipe()
-	writer := &goCloudPutWriter{s: s, pw: pw, result: make(chan result, 1)}
+	buf, err := util.NewStagingBuffer("")
+	if err != nil {
+		return nil, err
+	}
+	writer := &goCloudPutWriter{s: s, result: make(chan result, 1), buf: buf}
+	r, _ := buf.Reader()
 	go func() {
 		defer r.Close()
 		defer close(writer.result)
 		defer s.pendingSema.Release(1)
 
-		ctx, cf := context.WithCancel(context.TODO())
-		defer cf()
-
-		w, err := s.bucket.NewWriter(ctx, name, nil)
 		var n int64
-		if err == nil {
-			n, err = io.Copy(w, r)
+		var err error
+		var w io.WriteCloser
+		for {
+			r.Reset()
+
+			ctx, cf := context.WithCancel(context.TODO())
+			w, err = s.bucket.NewWriter(ctx, name, nil)
 			if err == nil {
-				w.Close()
-			} else {
-				cf()
-				w.Close()
+				n, err = io.Copy(w, r)
+				if err != nil {
+					cf()
+				}
+				err = w.Close()
 			}
-		}
-		if err != nil {
+			cf()
+			if err == ErrWriteCanceled {
+				log.Print("Write canceled for object: ", name)
+			}
+			if err == nil || err == ErrWriteCanceled {
+				break
+			}
 			log.Print("Error putting object: ", err)
+			time.Sleep(time.Second)
 		}
+
 		writer.result <- result{n: n, err: err}
 	}()
 	return writer, nil

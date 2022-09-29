@@ -88,8 +88,6 @@ func (u *StagedBlobUploader) doBlobUpload(key string) {
 	defer func() {
 		log.Printf("Uploaded %s in %s", key, time.Since(startTime))
 	}()
-	log.Printf("Uploading %s", key)
-
 	backoffs := 0
 	retry := func(err error) {
 		u.activeUploads.Release(1)
@@ -104,6 +102,7 @@ func (u *StagedBlobUploader) doBlobUpload(key string) {
 	}
 
 	for {
+		log.Printf("Uploading %s", key)
 		pendingName := u.makePendingName(key)
 		f, err := os.Open(pendingName)
 		if err != nil {

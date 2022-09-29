@@ -4,7 +4,7 @@ go 1.19
 
 require (
 	cloud.google.com/go/storage v1.26.0
-	github.com/akmistry/go-util v0.0.0-20220826051432-1e3e533181fe
+	github.com/akmistry/go-util v0.0.0-20220929012704-c6cda5d0505e
 	github.com/aws/aws-sdk-go v1.43.31
 	github.com/docker/libkv v0.2.1
 	github.com/hashicorp/golang-lru v0.5.1
