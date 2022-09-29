@@ -210,8 +210,10 @@ func (s *S3Store) Put(name string) (cloud.PutWriter, error) {
 				n, err = io.Copy(w, r)
 				if err != nil {
 					cf()
+					w.Close()
+				} else {
+					err = w.Close()
 				}
-				err = w.Close()
 			}
 			cf()
 			if err == nil || err == ErrWriteCanceled {
