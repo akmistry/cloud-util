@@ -75,17 +75,16 @@ func NewGCS3Store(endpoint, accessKey, secret, region, bucket string) *GCS3Store
 }
 
 func (s *GCS3Store) Size(name string) (int64, error) {
-	s.pendingSema.Acquire(context.Background(), 1)
-	defer s.pendingSema.Release(1)
-
-	attr, err := s.bucket.Attributes(context.TODO(), name)
-	if gcerrors.Code(err) == gcerrors.NotFound {
-		return 0, os.ErrNotExist
-	} else if err != nil {
-		return 0, err
+	for {
+		attr, err := s.bucket.Attributes(context.TODO(), name)
+		if err == nil {
+			return attr.Size, nil
+		} else if gcerrors.Code(err) == gcerrors.NotFound {
+			return 0, os.ErrNotExist
+		}
+		log.Printf("cloud-s3: error sizing blob %s: %v", name, err)
+		time.Sleep(time.Second)
 	}
-
-	return attr.Size, nil
 }
 
 type goCloudGetReader struct {
@@ -116,18 +115,27 @@ func (r *goCloudGetReader) ReadAt(b []byte, off int64) (int, error) {
 	r.s.pendingSema.Acquire(context.Background(), 1)
 	defer r.s.pendingSema.Release(1)
 
-	rr, err := r.s.bucket.NewRangeReader(context.TODO(), r.name, off, int64(len(b)), nil)
-	if gcerrors.Code(err) == gcerrors.NotFound {
-		return 0, os.ErrNotExist
-	} else if err != nil {
-		return 0, err
+	for {
+		rr, err := r.s.bucket.NewRangeReader(context.TODO(), r.name, off, int64(len(b)), nil)
+		if gcerrors.Code(err) == gcerrors.NotFound {
+			return 0, os.ErrNotExist
+		} else if err != nil {
+			log.Printf("cloud-s3: error attempting to read blob %s: %v", r.name, err)
+			time.Sleep(time.Second)
+			continue
+		}
+		n, err := io.ReadFull(rr, b)
+		rr.Close()
+		if err != nil {
+			log.Printf("cloud-s3: error reading blob %s: %v", r.name, err)
+			time.Sleep(time.Second)
+			continue
+		}
+		if n < oldLen {
+			err = io.EOF
+		}
+		return n, err
 	}
-	defer rr.Close()
-	n, err := io.ReadFull(rr, b)
-	if err == nil && n < oldLen {
-		err = io.EOF
-	}
-	return n, err
 }
 
 func (r *goCloudGetReader) Close() error {
@@ -222,13 +230,10 @@ func (s *GCS3Store) Put(name string) (cloud.PutWriter, error) {
 				err = w.Close()
 			}
 			cf()
-			if err == ErrWriteCanceled {
-				log.Print("Write canceled for object: ", name)
-			}
 			if err == nil || err == ErrWriteCanceled {
 				break
 			}
-			log.Print("Error putting object: ", err)
+			log.Printf("cloud-s3: error putting blob %s: %v", name, err)
 			time.Sleep(time.Second)
 		}
 
@@ -238,7 +243,16 @@ func (s *GCS3Store) Put(name string) (cloud.PutWriter, error) {
 }
 
 func (s *GCS3Store) Delete(name string) error {
-	return s.bucket.Delete(context.TODO(), name)
+	for {
+		err := s.bucket.Delete(context.TODO(), name)
+		if err == nil {
+			return nil
+		} else if gcerrors.Code(err) == gcerrors.NotFound {
+			return os.ErrNotExist
+		}
+		log.Printf("cloud-s3: error deleting blob %s: %v", name, err)
+		time.Sleep(time.Second)
+	}
 }
 
 func (s *GCS3Store) List() ([]string, error) {
