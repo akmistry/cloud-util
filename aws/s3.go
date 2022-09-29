@@ -2,11 +2,11 @@ package aws
 
 import (
 	"context"
+	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"log"
-	//"net/http"
-	"errors"
 	"os"
 	"time"
 
@@ -22,34 +22,27 @@ import (
 	"github.com/akmistry/cloud-util/util"
 )
 
-//var flagS3DisableTls = flag.Bool("s3-disable-tls", false, "Disable TLS for S3")
+var (
+	ErrWriteCanceled = errors.New("cloud: blob write canceled")
 
-//const maxPendingFetches = 512
+	flagS3DisableTls = flag.Bool("s3-disable-tls", false, "Disable TLS for S3")
+)
 
-type GCS3Store struct {
+const (
+	maxPendingFetches = 512
+)
+
+type S3Store struct {
 	session     *session.Session
 	bucket      *blob.Bucket
 	pendingSema *semaphore.Weighted
 }
 
-var (
-	ErrWriteCanceled = errors.New("cloud: blob write canceled")
-)
-
-func NewDefaultGCS3Store(bucket string) *GCS3Store {
-	return NewGCS3Store(*Endpoint, *AccessId, *AccessSecret, *Region, bucket)
+func NewDefaultS3Store(bucket string) *S3Store {
+	return NewS3Store(*Endpoint, *AccessId, *AccessSecret, *Region, bucket)
 }
 
-func NewGCS3Store(endpoint, accessKey, secret, region, bucket string) *GCS3Store {
-	/*
-		transport := &http.Transport{
-			MaxIdleConnsPerHost:   1024,
-			IdleConnTimeout:       90 * time.Second,
-			ExpectContinueTimeout: 1 * time.Second,
-			DisableCompression:    true,
-		}
-	*/
-
+func NewS3Store(endpoint, accessKey, secret, region, bucket string) *S3Store {
 	session, err := session.NewSession(&aws.Config{
 		Endpoint:         aws.String(endpoint),
 		Credentials:      credentials.NewStaticCredentials(accessKey, secret, ""),
@@ -61,20 +54,19 @@ func NewGCS3Store(endpoint, accessKey, secret, region, bucket string) *GCS3Store
 		panic(err)
 	}
 
-	// Create a *blob.Bucket.
 	blobBucket, err := s3blob.OpenBucket(context.TODO(), session, bucket, nil)
 	if err != nil {
 		panic(err)
 	}
 
-	return &GCS3Store{
+	return &S3Store{
 		session:     session,
 		bucket:      blobBucket,
 		pendingSema: semaphore.NewWeighted(maxPendingFetches),
 	}
 }
 
-func (s *GCS3Store) Size(name string) (int64, error) {
+func (s *S3Store) Size(name string) (int64, error) {
 	for {
 		attr, err := s.bucket.Attributes(context.TODO(), name)
 		if err == nil {
@@ -87,23 +79,17 @@ func (s *GCS3Store) Size(name string) (int64, error) {
 	}
 }
 
-type goCloudGetReader struct {
-	s    *GCS3Store
+type s3GetReader struct {
+	s    *S3Store
 	name string
 	size int64
 }
 
-/*
-func createRange(off, len int64) string {
-	return fmt.Sprintf("bytes=%d-%d", off, off+len-1)
-}
-*/
-
-func (r *goCloudGetReader) Size() int64 {
+func (r *s3GetReader) Size() int64 {
 	return r.size
 }
 
-func (r *goCloudGetReader) ReadAt(b []byte, off int64) (int, error) {
+func (r *s3GetReader) ReadAt(b []byte, off int64) (int, error) {
 	if off >= r.size {
 		return 0, io.EOF
 	}
@@ -138,28 +124,33 @@ func (r *goCloudGetReader) ReadAt(b []byte, off int64) (int, error) {
 	}
 }
 
-func (r *goCloudGetReader) Close() error {
+func (r *s3GetReader) Close() error {
 	return nil
 }
 
-func (s *GCS3Store) Get(name string) (cloud.GetReader, error) {
+func (s *S3Store) Get(name string) (cloud.GetReader, error) {
 	size, err := s.Size(name)
 	if err != nil {
 		return nil, err
 	}
-	r := &goCloudGetReader{s: s, name: name, size: size}
+	r := &s3GetReader{s: s, name: name, size: size}
 	return r, nil
 }
 
-type goCloudPutWriter struct {
-	s      *GCS3Store
+type result struct {
+	n   int64
+	err error
+}
+
+type s3PutWriter struct {
+	s      *S3Store
 	result chan result
 	closed bool
 
 	buf *util.StagingBuffer
 }
 
-func (w *goCloudPutWriter) Write(b []byte) (int, error) {
+func (w *s3PutWriter) Write(b []byte) (int, error) {
 	n, err := w.buf.Write(b)
 	if err != nil {
 		err = fmt.Errorf("error writing %d bytes: %v", len(b), err)
@@ -167,7 +158,7 @@ func (w *goCloudPutWriter) Write(b []byte) (int, error) {
 	return n, err
 }
 
-func (w *goCloudPutWriter) Close() error {
+func (w *s3PutWriter) Close() error {
 	if w.closed {
 		return nil
 	}
@@ -182,7 +173,7 @@ func (w *goCloudPutWriter) Close() error {
 	return nil
 }
 
-func (w *goCloudPutWriter) Cancel() error {
+func (w *s3PutWriter) Cancel() error {
 	if w.closed {
 		return nil
 	}
@@ -194,20 +185,13 @@ func (w *goCloudPutWriter) Cancel() error {
 	return nil
 }
 
-/*
-type result struct {
-	n   int64
-	err error
-}
-*/
-
-func (s *GCS3Store) Put(name string) (cloud.PutWriter, error) {
+func (s *S3Store) Put(name string) (cloud.PutWriter, error) {
 	s.pendingSema.Acquire(context.Background(), 1)
 	buf, err := util.NewStagingBuffer("")
 	if err != nil {
 		return nil, err
 	}
-	writer := &goCloudPutWriter{s: s, result: make(chan result, 1), buf: buf}
+	writer := &s3PutWriter{s: s, result: make(chan result, 1), buf: buf}
 	r, _ := buf.Reader()
 	go func() {
 		defer r.Close()
@@ -242,7 +226,7 @@ func (s *GCS3Store) Put(name string) (cloud.PutWriter, error) {
 	return writer, nil
 }
 
-func (s *GCS3Store) Delete(name string) error {
+func (s *S3Store) Delete(name string) error {
 	for {
 		err := s.bucket.Delete(context.TODO(), name)
 		if err == nil {
@@ -255,7 +239,7 @@ func (s *GCS3Store) Delete(name string) error {
 	}
 }
 
-func (s *GCS3Store) List() ([]string, error) {
+func (s *S3Store) List() ([]string, error) {
 	names := make([]string, 0)
 
 	iter := s.bucket.List(nil)
