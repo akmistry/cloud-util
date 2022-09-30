@@ -1,6 +1,7 @@
 package local
 
 import (
+	"errors"
 	"io/fs"
 	"log"
 	"os"
@@ -67,7 +68,9 @@ func (s *DirBlobStore) makeFilePath(key string) string {
 func (s *DirBlobStore) Size(key string) (int64, error) {
 	path := s.makeFilePath(key)
 	fi, err := os.Stat(path)
-	if err != nil {
+	if errors.Is(err, os.ErrNotExist) {
+		return 0, os.ErrNotExist
+	} else if err != nil {
 		return 0, err
 	}
 	return fi.Size(), nil
@@ -85,7 +88,9 @@ func (r *fileBlobReader) Size() int64 {
 func (s *DirBlobStore) Get(key string) (cloud.GetReader, error) {
 	path := s.makeFilePath(key)
 	f, err := os.Open(path)
-	if err != nil {
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, os.ErrNotExist
+	} else if err != nil {
 		return nil, err
 	}
 
@@ -148,7 +153,11 @@ func (s *DirBlobStore) Put(key string) (cloud.PutWriter, error) {
 
 func (s *DirBlobStore) Delete(key string) error {
 	path := s.makeFilePath(key)
-	return os.Remove(path)
+	err := os.Remove(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return os.ErrNotExist
+	}
+	return err
 }
 
 func (s *DirBlobStore) List() ([]string, error) {
