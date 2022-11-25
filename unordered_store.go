@@ -4,6 +4,9 @@ import (
 	"github.com/docker/libkv/store"
 )
 
+type WriteOptions = store.WriteOptions
+
+// Subset of libkv/store.Store
 type UnorderedStore interface {
 	Get(key string) (*store.KVPair, error)
 	Exists(key string) (bool, error)

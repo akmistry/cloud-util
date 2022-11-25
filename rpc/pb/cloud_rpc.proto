@@ -1,0 +1,70 @@
+syntax = "proto3";                                                              
+package cloud_rpc_pb;
+
+option go_package = "github.com/akmistry/cloud-util/rpc/pb";
+
+message GetRequest {
+  string db_name = 1;
+  string key = 2;
+}
+
+message GetResponse {
+  bytes val = 1;
+}
+
+message PutRequest {
+  string db_name = 1;
+  string key = 2;
+  bytes val = 3;
+}
+
+message PutResponse {
+}
+
+message DeleteRequest {
+  string db_name = 1;                                                           
+  string key = 2;
+}
+
+message DeleteResponse {
+}
+
+message ListRequest {
+  string db_name = 1;
+  string start_key = 2;
+  bytes cursor = 3;
+}
+
+message ListResponse {
+  repeated string keys = 1;
+  bytes cursor = 2;
+}
+
+message AtomicPutRequest {
+  string db_name = 1;
+  string key = 2;
+  bytes val = 3;
+  bytes old_val = 4;
+}
+
+message AtomicPutResponse {
+}
+
+message AtomicDeleteRequest {
+  string db_name = 1;
+  string key = 2;
+  bytes old_val = 3;
+}
+
+message AtomicDeleteResponse {
+}
+
+service Store {
+  rpc Get(GetRequest) returns (GetResponse) {}
+  rpc Put(PutRequest) returns (PutResponse) {}
+  rpc Delete(DeleteRequest) returns (DeleteResponse) {}
+  rpc List(ListRequest) returns (ListResponse) {}
+
+  rpc AtomicPut(AtomicPutRequest) returns (AtomicPutResponse) {}
+  rpc AtomicDelete(AtomicDeleteRequest) returns (AtomicDeleteResponse) {}
+}
