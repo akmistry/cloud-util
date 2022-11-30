@@ -18,7 +18,7 @@ import (
 )
 
 var (
-	rootDir = flag.String("root-dir", "", "Root directory for key-value store files")
+	rootDir = flag.String("root-dir", ".", "Root directory for key-value store files")
 	addr    = flag.String("addr", "localhost:18100", "Address:port to listen on")
 )
 
