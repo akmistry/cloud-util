@@ -2,6 +2,8 @@ package rpc
 
 import (
 	"context"
+	"fmt"
+	"net/url"
 	"time"
 
 	"google.golang.org/grpc"
@@ -12,12 +14,39 @@ import (
 	"github.com/akmistry/cloud-util/rpc/pb"
 )
 
+const (
+	scheme = "rpc"
+)
+
 type Store struct {
 	name   string
 	client pb.StoreClient
 }
 
 var _ = (cloud.UnorderedStore)((*Store)(nil))
+
+func init() {
+	cloud.RegisterStoreScheme(scheme, openStore)
+}
+
+func openStore(path string) (cloud.UnorderedStore, error) {
+	u, err := url.Parse(path)
+	if err != nil {
+		return nil, err
+	}
+	if u.Scheme != scheme {
+		return nil, fmt.Errorf("cloud/rpc: unexpected scheme: %s", u.Scheme)
+	} else if u.Host == "" {
+		return nil, fmt.Errorf("cloud/rpc: empty host")
+	} else if u.Path[0] != '/' {
+		return nil, fmt.Errorf("cloud/rpc: invalid path: %s", u.Path)
+	}
+	name := u.Path[1:]
+	if name == "" {
+		return nil, fmt.Errorf("cloud/rpc: empty name")
+	}
+	return NewStore(u.Host, name)
+}
 
 func NewStore(addr, name string) (*Store, error) {
 	conn, err := grpc.Dial(addr, grpc.WithBlock(), grpc.WithInsecure(), grpc.WithTimeout(5*time.Second))
