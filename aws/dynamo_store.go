@@ -2,12 +2,13 @@ package aws
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/credentials"
+	//"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
@@ -55,11 +56,11 @@ func openStore(path string) (cloud.UnorderedStore, error) {
 }
 
 func NewDefaultDynamoStore(tableName string) (*DynamoStore, error) {
-	credProvider := credentials.NewStaticCredentialsProvider(
-		*AccessId, *AccessSecret, "")
-	cfg, err := config.LoadDefaultConfig(context.TODO(),
-		config.WithRegion(*Region),
-		config.WithCredentialsProvider(credProvider))
+	//credProvider := credentials.NewStaticCredentialsProvider(
+	//	*AccessId, *AccessSecret, "")
+	cfg, err := config.LoadDefaultConfig(context.TODO())
+	//	config.WithRegion(*Region))
+	//config.WithCredentialsProvider(credProvider))
 	if err != nil {
 		return nil, err
 	}
@@ -93,6 +94,10 @@ func (s *DynamoStore) Get(key string) (*cloud.KVPair, error) {
 			Key:            s.makeKey(key),
 		})
 	if err != nil {
+		var notFoundErr *types.ResourceNotFoundException
+		if errors.As(err, &notFoundErr) {
+			return nil, cloud.ErrKeyNotFound
+		}
 		return nil, err
 	} else if out.Item == nil {
 		return nil, cloud.ErrKeyNotFound
