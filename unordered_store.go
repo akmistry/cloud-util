@@ -9,6 +9,7 @@ type WriteOptions = store.WriteOptions
 // Subset of libkv/store.Store
 type UnorderedStore interface {
 	Get(key string) (*store.KVPair, error)
+	// TODO: Potentially get rid of this function?
 	Exists(key string) (bool, error)
 	Put(key string, value []byte, options *store.WriteOptions) error
 	Delete(key string) error
