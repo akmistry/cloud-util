@@ -18,6 +18,8 @@ import (
 
 const (
 	scheme = "aws"
+
+	queryParamRegion = "r"
 )
 
 type DynamoStore struct {
@@ -31,6 +33,7 @@ func init() {
 	cloud.RegisterStoreScheme(scheme, openStore)
 }
 
+// URL format: aws://dynamodb/<table name>[?r=<region>]
 func openStore(path string) (cloud.UnorderedStore, error) {
 	u, err := url.Parse(path)
 	if err != nil {
@@ -47,20 +50,22 @@ func openStore(path string) (cloud.UnorderedStore, error) {
 	if name == "" {
 		return nil, fmt.Errorf("cloud/aws: empty table name")
 	}
+	region := u.Query().Get(queryParamRegion)
+
 	switch u.Host {
 	case "dynamodb":
-		return NewDefaultDynamoStore(name)
+		var fns []func(*config.LoadOptions) error
+		if region != "" {
+			fns = append(fns, config.WithRegion(region))
+		}
+		return NewDefaultDynamoStore(name, fns...)
 	default:
 		return nil, fmt.Errorf("cloud/aws: invalid type: %s", u.Host)
 	}
 }
 
-func NewDefaultDynamoStore(tableName string) (*DynamoStore, error) {
-	//credProvider := credentials.NewStaticCredentialsProvider(
-	//	*AccessId, *AccessSecret, "")
-	cfg, err := config.LoadDefaultConfig(context.TODO())
-	//	config.WithRegion(*Region))
-	//config.WithCredentialsProvider(credProvider))
+func NewDefaultDynamoStore(tableName string, optFns ...func(*config.LoadOptions) error) (*DynamoStore, error) {
+	cfg, err := config.LoadDefaultConfig(context.TODO(), optFns...)
 	if err != nil {
 		return nil, err
 	}
