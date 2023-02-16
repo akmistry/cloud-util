@@ -12,7 +12,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/dynamodb v1.17.7
 	github.com/aws/aws-sdk-go-v2/service/ses v1.15.0
 	github.com/docker/libkv v0.2.1
-	github.com/hashicorp/golang-lru v0.5.1
+	github.com/hashicorp/golang-lru/v2 v2.0.1
 	github.com/prometheus/client_golang v1.13.0
 	gocloud.dev v0.26.0
 	golang.org/x/sync v0.0.0-20220907140024-f12130a52804

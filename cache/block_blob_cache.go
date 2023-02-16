@@ -12,7 +12,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/hashicorp/golang-lru"
+	"github.com/hashicorp/golang-lru/v2"
 
 	"github.com/akmistry/cloud-util"
 )
@@ -35,7 +35,7 @@ type cacheBlockReader interface {
 type BlockBlobCache struct {
 	dir     string
 	backing cloud.BlobStore
-	lru     *lru.Cache
+	lru     *lru.Cache[string, bool]
 
 	blobReaderCache map[string]cloud.GetReader
 
@@ -54,9 +54,8 @@ func NewBlockBlobCache(bs cloud.BlobStore, dir string, cacheSize int64) (*BlockB
 		blobReaderCache: make(map[string]cloud.GetReader),
 	}
 
-	evictFunc := func(key interface{}, value interface{}) {
-		path := key.(string)
-		os.Remove(path)
+	evictFunc := func(key string, value bool) {
+		os.Remove(key)
 	}
 	c.lru, err = lru.NewWithEvict(int(cacheSize/blockSize), evictFunc)
 	if err != nil {
@@ -110,7 +109,8 @@ func (c *BlockBlobCache) makeBlockFilePath(key string, block int64) string {
 
 func (c *BlockBlobCache) getBlockReader(key string, blobSize int64, block int64, br cloud.GetReader) (cacheBlockReader, error) {
 	name := c.makeBlockFilePath(key, block)
-	c.lru.Add(name, true)
+	c.lru.Get(name)
+
 	f, err := os.Open(name)
 	if err == nil {
 		return f, nil
@@ -149,6 +149,7 @@ func (c *BlockBlobCache) getBlockReader(key string, blobSize int64, block int64,
 	if err != nil {
 		log.Printf("Unable to stat or chown %s: %v", f.Name(), err)
 	}
+	c.lru.Add(name, true)
 
 	return f, nil
 }
