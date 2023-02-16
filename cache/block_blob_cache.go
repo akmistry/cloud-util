@@ -2,7 +2,6 @@ package cache
 
 import (
 	"errors"
-	"fmt"
 	"io"
 	"io/fs"
 	"log"
@@ -26,6 +25,86 @@ var (
 		return make([]byte, blockSize)
 	}}
 )
+
+type openFile struct {
+	*os.File
+	refCount int
+
+	lock sync.Mutex
+	cond *sync.Cond
+}
+
+func (f *openFile) Close() error {
+	f.unref()
+	return nil
+}
+
+func (f *openFile) ref() bool {
+	f.lock.Lock()
+	defer f.lock.Unlock()
+
+	if f.File == nil {
+		return false
+	}
+	f.refCount++
+	return true
+}
+
+func (f *openFile) unref() {
+	f.lock.Lock()
+	defer f.lock.Unlock()
+
+	f.refCount--
+	if f.refCount < 0 {
+		panic("f.refCount < 0")
+	} else if f.refCount == 0 {
+		f.cond.Signal()
+	}
+}
+
+func openFileEvict(fname string, f *openFile) {
+	go func() {
+		f.lock.Lock()
+		defer f.lock.Unlock()
+
+		for f.refCount != 0 {
+			f.cond.Wait()
+		}
+		f.File.Close()
+		f.File = nil
+		f.cond = nil
+	}()
+}
+
+var openFileCache *lru.Cache[string, *openFile]
+
+func init() {
+	var err error
+	openFileCache, err = lru.NewWithEvict(1000, openFileEvict)
+	if err != nil {
+		panic(err)
+	}
+}
+
+func openFileWithCache(name string) (*openFile, error) {
+	f, ok := openFileCache.Get(name)
+	if ok && f.ref() {
+		return f, nil
+	}
+
+	osf, err := os.Open(name)
+	if err != nil {
+		return nil, err
+	}
+
+	f = &openFile{
+		File:     osf,
+		refCount: 1,
+	}
+	f.cond = sync.NewCond(&f.lock)
+	openFileCache.Add(name, f)
+	return f, nil
+}
 
 type cacheBlockReader interface {
 	io.ReaderAt
@@ -104,16 +183,17 @@ func (c *BlockBlobCache) makeBlockFilePath(key string, block int64) string {
 	if block%blockSize != 0 {
 		log.Fatalf("block %d %% blockSize %d != 0", block, blockSize)
 	}
-	return filepath.Join(c.dir, fmt.Sprintf("%s-%d", key, block))
+	basename := key + "-" + strconv.FormatInt(block, 10)
+	return filepath.Join(c.dir, basename)
 }
 
 func (c *BlockBlobCache) getBlockReader(key string, blobSize int64, block int64, br cloud.GetReader) (cacheBlockReader, error) {
 	name := c.makeBlockFilePath(key, block)
 	c.lru.Get(name)
 
-	f, err := os.Open(name)
+	of, err := openFileWithCache(name)
 	if err == nil {
-		return f, nil
+		return of, nil
 	}
 
 	// TODO: Ensure the same block isn't downloaded more than once concurrently
@@ -128,7 +208,7 @@ func (c *BlockBlobCache) getBlockReader(key string, blobSize int64, block int64,
 	}
 	buf = buf[:n]
 
-	f, err = os.CreateTemp(c.dir, "block-temp*")
+	f, err := os.CreateTemp(c.dir, "block-temp*")
 	if err != nil {
 		return nil, err
 	}
