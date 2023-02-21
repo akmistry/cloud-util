@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/hashicorp/golang-lru/v2"
 	"golang.org/x/sync/semaphore"
 
 	"github.com/akmistry/cloud-util"
@@ -22,7 +23,10 @@ const (
 	pendingPrefix   = "pending-"
 	completedPrefix = "completed-"
 
-	maxActiveUploads = 2
+	maxActiveUploads    = 2
+	maxCompletedUploads = 10
+
+	maxOpenStagedFiles = maxCompletedUploads + maxActiveUploads
 )
 
 type StagedBlobUploader struct {
@@ -30,6 +34,9 @@ type StagedBlobUploader struct {
 	backing      cloud.BlobStore
 	pendingBlobs map[string]bool
 	lock         sync.Mutex
+
+	fileCache    *OpenFileCache
+	completedLru *lru.Cache[string, bool]
 
 	activeUploads *semaphore.Weighted
 }
@@ -45,6 +52,7 @@ func NewStagedBlobUploader(bs cloud.BlobStore, dir string) (*StagedBlobUploader,
 		return nil, err
 	}
 	pendingBlobs := make(map[string]bool, len(dirents))
+	var completedBlobs []string
 	for _, e := range dirents {
 		if strings.HasPrefix(e.Name(), tempPrefix) {
 			log.Printf("Deleting temp file %s", e.Name())
@@ -52,6 +60,9 @@ func NewStagedBlobUploader(bs cloud.BlobStore, dir string) (*StagedBlobUploader,
 			if err != nil {
 				log.Printf("Error removing temp file %s: %v", e.Name(), err)
 			}
+			continue
+		} else if strings.HasPrefix(e.Name(), completedPrefix) {
+			completedBlobs = append(completedBlobs, filepath.Join(dir, e.Name()))
 			continue
 		} else if !strings.HasPrefix(e.Name(), pendingPrefix) {
 			continue
@@ -64,12 +75,27 @@ func NewStagedBlobUploader(bs cloud.BlobStore, dir string) (*StagedBlobUploader,
 		dir:           dir,
 		backing:       bs,
 		pendingBlobs:  pendingBlobs,
+		fileCache:     NewOpenFileCache(maxOpenStagedFiles),
 		activeUploads: semaphore.NewWeighted(maxActiveUploads),
 	}
 	for key := range u.pendingBlobs {
 		go u.doBlobUpload(key)
 	}
+
+	u.completedLru, err = lru.NewWithEvict(maxCompletedUploads, u.evictFunc)
+	if err != nil {
+		panic(err)
+	}
+	for _, f := range completedBlobs {
+		u.completedLru.Add(f, true)
+	}
 	return u, nil
+}
+
+func (u *StagedBlobUploader) evictFunc(fname string, _ bool) {
+	log.Printf("Evicting %s from staging cache", fname)
+	os.Remove(fname)
+	u.fileCache.Remove(fname)
 }
 
 func (u *StagedBlobUploader) makePendingName(key string) string {
@@ -152,10 +178,16 @@ func (u *StagedBlobUploader) doBlobUpload(key string) {
 			retry(err)
 			continue
 		}
-		err = os.Rename(pendingName, u.makeCompletedName(key))
+		cName := u.makeCompletedName(key)
+		err = os.Rename(pendingName, cName)
 		if err != nil {
 			panic(err)
 		}
+		// Remove the pending name from the cache so that files don't stay open
+		// with the pending name.
+		u.fileCache.Remove(pendingName)
+		u.completedLru.Add(cName, true)
+
 		return
 	}
 }
@@ -235,18 +267,70 @@ func (u *StagedBlobUploader) Delete(key string) error {
 		if err != nil {
 			log.Printf("Unable to delete %s: %v", fname, err)
 		}
+		u.completedLru.Remove(fname)
 	}
 
 	return u.backing.Delete(key)
 }
 
 type fileReader struct {
-	*os.File
+	key   string
+	u     *StagedBlobUploader
+	fname string
+
+	backingReader cloud.GetReader
+
 	size int64
+
+	lock sync.Mutex
+}
+
+func (r *fileReader) ReadAt(b []byte, off int64) (int, error) {
+	const maxTries = 2
+
+	r.lock.Lock()
+	for i := 0; i < maxTries; i++ {
+		fname := r.fname
+		if fname == "" {
+			break
+		}
+		r.lock.Unlock()
+
+		f, err := r.u.fileCache.Open(fname)
+		if err == nil {
+			defer f.Close()
+			return f.ReadAt(b, off)
+		}
+
+		r.lock.Lock()
+		r.fname = r.u.findStagedBlob(r.key)
+	}
+
+	if r.backingReader == nil {
+		var err error
+		r.backingReader, err = r.u.backing.Get(r.key)
+		if err != nil {
+			r.lock.Unlock()
+			return 0, err
+		}
+	}
+	br := r.backingReader
+	r.lock.Unlock()
+
+	return br.ReadAt(b, off)
 }
 
 func (r *fileReader) Size() int64 {
 	return r.size
+}
+
+func (r *fileReader) Close() error {
+	if r.backingReader != nil {
+		err := r.backingReader.Close()
+		r.backingReader = nil
+		return err
+	}
+	return nil
 }
 
 func (u *StagedBlobUploader) Get(key string) (cloud.GetReader, error) {
@@ -255,11 +339,11 @@ func (u *StagedBlobUploader) Get(key string) (cloud.GetReader, error) {
 		f, err := os.Open(fname)
 		if err == nil {
 			fi, err := f.Stat()
+			f.Close()
 			if err == nil {
-				return &fileReader{File: f, size: fi.Size()}, nil
+				return &fileReader{key: key, u: u, fname: fname, size: fi.Size()}, nil
 			}
 			log.Printf("Unable to stat for reading %s: %v", fname, err)
-			f.Close()
 		} else {
 			log.Printf("Unable to open for reading %s: %v", fname, err)
 		}
