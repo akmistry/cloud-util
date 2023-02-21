@@ -26,99 +26,32 @@ var (
 	}}
 )
 
-type openFile struct {
-	*os.File
-	refCount int
-
-	lock sync.Mutex
-	cond *sync.Cond
-}
-
-func (f *openFile) Close() error {
-	f.unref()
-	return nil
-}
-
-func (f *openFile) ref() bool {
-	f.lock.Lock()
-	defer f.lock.Unlock()
-
-	if f.File == nil {
-		return false
-	}
-	f.refCount++
-	return true
-}
-
-func (f *openFile) unref() {
-	f.lock.Lock()
-	defer f.lock.Unlock()
-
-	f.refCount--
-	if f.refCount < 0 {
-		panic("f.refCount < 0")
-	} else if f.refCount == 0 {
-		f.cond.Signal()
-	}
-}
-
-func openFileEvict(fname string, f *openFile) {
-	go func() {
-		f.lock.Lock()
-		defer f.lock.Unlock()
-
-		for f.refCount != 0 {
-			f.cond.Wait()
-		}
-		f.File.Close()
-		f.File = nil
-		f.cond = nil
-	}()
-}
-
-var openFileCache *lru.Cache[string, *openFile]
+var openFileCache *OpenFileCache
 
 func init() {
-	var err error
-	openFileCache, err = lru.NewWithEvict(1000, openFileEvict)
-	if err != nil {
-		panic(err)
-	}
-}
-
-func openFileWithCache(name string) (*openFile, error) {
-	f, ok := openFileCache.Get(name)
-	if ok && f.ref() {
-		return f, nil
-	}
-
-	osf, err := os.Open(name)
-	if err != nil {
-		return nil, err
-	}
-
-	f = &openFile{
-		File:     osf,
-		refCount: 1,
-	}
-	f.cond = sync.NewCond(&f.lock)
-	openFileCache.Add(name, f)
-	return f, nil
-}
-
-type cacheBlockReader interface {
-	io.ReaderAt
-	io.Closer
+	openFileCache = NewOpenFileCache(1000)
 }
 
 type BlockBlobCache struct {
 	dir     string
 	backing cloud.BlobStore
-	lru     *lru.Cache[string, bool]
 
 	blobReaderCache map[string]cloud.GetReader
 
+	blockCacheLru *lru.Cache[blockCacheKey, *blockCacheEntry]
+
 	lock sync.Mutex
+}
+
+type blockCacheKey struct {
+	blobKey string
+	block   int64
+}
+
+type blockCacheEntry struct {
+	fname string
+
+	downloadDone chan struct{}
 }
 
 func NewBlockBlobCache(bs cloud.BlobStore, dir string, cacheSize int64) (*BlockBlobCache, error) {
@@ -133,10 +66,8 @@ func NewBlockBlobCache(bs cloud.BlobStore, dir string, cacheSize int64) (*BlockB
 		blobReaderCache: make(map[string]cloud.GetReader),
 	}
 
-	evictFunc := func(key string, value bool) {
-		os.Remove(key)
-	}
-	c.lru, err = lru.NewWithEvict(int(cacheSize/blockSize), evictFunc)
+	c.blockCacheLru, err = lru.NewWithEvict[blockCacheKey, *blockCacheEntry](
+		int(cacheSize/blockSize), c.blockEvictFunc)
 	if err != nil {
 		return nil, err
 	}
@@ -152,11 +83,36 @@ func NewBlockBlobCache(bs cloud.BlobStore, dir string, cacheSize int64) (*BlockB
 			return nil
 		}
 
-		c.lru.Add(path, true)
+		basename := d.Name()
+		split := strings.LastIndex(basename, "-")
+		if split < 0 {
+			log.Printf("Error parsing cache file name %s", basename)
+			return nil
+		}
+		key := basename[:split]
+		block, err := strconv.ParseUint(basename[split+1:], 10, 64)
+		if err != nil {
+			log.Printf("Error parsing cache file block offset %s: %v", basename, err)
+			return nil
+		}
+
+		cacheKey := blockCacheKey{blobKey: key, block: int64(block)}
+		entry := &blockCacheEntry{
+			fname:        path,
+			downloadDone: make(chan struct{}),
+		}
+		close(entry.downloadDone)
+		c.blockCacheLru.Add(cacheKey, entry)
+
 		return nil
 	})
 
 	return c, nil
+}
+
+func (c *BlockBlobCache) blockEvictFunc(key blockCacheKey, e *blockCacheEntry) {
+	os.Remove(e.fname)
+	openFileCache.Remove(e.fname)
 }
 
 func (c *BlockBlobCache) Size(key string) (int64, error) {
@@ -187,51 +143,71 @@ func (c *BlockBlobCache) makeBlockFilePath(key string, block int64) string {
 	return filepath.Join(c.dir, basename)
 }
 
-func (c *BlockBlobCache) getBlockReader(key string, blobSize int64, block int64, br cloud.GetReader) (cacheBlockReader, error) {
-	name := c.makeBlockFilePath(key, block)
-	c.lru.Get(name)
+func (c *BlockBlobCache) getBlockReader(key string, blobSize int64, block int64, br cloud.GetReader) (ReaderAtCloser, error) {
+	cacheKey := blockCacheKey{blobKey: key, block: block}
 
-	of, err := openFileWithCache(name)
-	if err == nil {
-		return of, nil
-	}
+	for {
+		c.lock.Lock()
+		entry, ok := c.blockCacheLru.Get(cacheKey)
+		if ok {
+			c.lock.Unlock()
 
-	// TODO: Ensure the same block isn't downloaded more than once concurrently
-	buf := blockBufPool.Get().([]byte)
-	defer blockBufPool.Put(buf)
-	if blockSize > blobSize-block {
-		buf = buf[:int(blobSize-block)]
-	}
-	n, err := br.ReadAt(buf, block)
-	if err != nil && err != io.EOF {
-		return nil, err
-	}
-	buf = buf[:n]
+			<-entry.downloadDone
+			// Open file
+			r, err := openFileCache.Open(entry.fname)
+			if err != nil {
+				log.Printf("Error opening cache file %s: %v", entry.fname, err)
+				// Retry
+				continue
+			}
+			return r, nil
+		}
 
-	f, err := os.CreateTemp(c.dir, "block-temp*")
-	if err != nil {
-		return nil, err
-	}
-	_, err = f.Write(buf)
-	if err != nil {
-		f.Close()
-		os.Remove(f.Name())
-		return nil, err
-	}
-	err = os.Rename(f.Name(), name)
-	if err != nil {
-		log.Printf("Unable to rename %s to %s: %v", f.Name(), name, err)
-	}
-	fi, err := f.Stat()
-	if err == nil {
-		err = f.Chmod(fi.Mode() | 0644)
-	}
-	if err != nil {
-		log.Printf("Unable to stat or chown %s: %v", f.Name(), err)
-	}
-	c.lru.Add(name, true)
+		name := c.makeBlockFilePath(key, block)
+		entry = &blockCacheEntry{
+			fname:        name,
+			downloadDone: make(chan struct{}),
+		}
+		c.blockCacheLru.Add(cacheKey, entry)
+		c.lock.Unlock()
 
-	return f, nil
+		defer close(entry.downloadDone)
+
+		buf := blockBufPool.Get().([]byte)
+		defer blockBufPool.Put(buf)
+		if blockSize > blobSize-block {
+			buf = buf[:int(blobSize-block)]
+		}
+		n, err := br.ReadAt(buf, block)
+		if err != nil && err != io.EOF {
+			return nil, err
+		}
+		buf = buf[:n]
+
+		f, err := os.CreateTemp(c.dir, "block-temp*")
+		if err != nil {
+			return nil, err
+		}
+		_, err = f.Write(buf)
+		if err != nil {
+			f.Close()
+			os.Remove(f.Name())
+			return nil, err
+		}
+		err = os.Rename(f.Name(), name)
+		if err != nil {
+			log.Printf("Unable to rename %s to %s: %v", f.Name(), name, err)
+		}
+		fi, err := f.Stat()
+		if err == nil {
+			err = f.Chmod(fi.Mode() | 0644)
+		}
+		if err != nil {
+			log.Printf("Unable to stat or chown %s: %v", f.Name(), err)
+		}
+
+		return f, nil
+	}
 }
 
 type cacheReader struct {
@@ -328,6 +304,7 @@ func (c *BlockBlobCache) deleteCachedBlocks(key string) {
 		if err != nil {
 			log.Printf("Error removing block file %s: %v", path, err)
 		}
+		openFileCache.Remove(path)
 		return nil
 	})
 }
