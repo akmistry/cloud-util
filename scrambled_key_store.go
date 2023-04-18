@@ -70,28 +70,3 @@ func (s *ScrambledKeyStore) AtomicDelete(key string, previous *KVPair) (bool, er
 	}
 	return false, ErrCallNotSupported
 }
-
-func (s *ScrambledKeyStore) Watch(key string, stopCh <-chan struct{}) (<-chan *KVPair, error) {
-	return nil, ErrCallNotSupported
-}
-
-func (*ScrambledKeyStore) WatchTree(directory string, stopCh <-chan struct{}) (<-chan []*KVPair, error) {
-	return nil, ErrCallNotSupported
-}
-
-func (s *ScrambledKeyStore) NewLock(key string, options *LockOptions) (Locker, error) {
-	return nil, ErrCallNotSupported
-}
-
-func (*ScrambledKeyStore) List(directory string) ([]*KVPair, error) {
-	return nil, ErrCallNotSupported
-}
-
-func (*ScrambledKeyStore) DeleteTree(directory string) error {
-	return ErrCallNotSupported
-}
-
-func (s *ScrambledKeyStore) ListKeys(start string) ([]string, error) {
-	// Doesn't make sense if keys are scrambled
-	return nil, ErrCallNotSupported
-}

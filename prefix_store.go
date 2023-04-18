@@ -25,10 +25,6 @@ func (s *PrefixStore) makeKey(key string) string {
 	return k
 }
 
-func (s *PrefixStore) Close() {
-	// No-op, since it doesn't make sense to "close" a prefix.
-}
-
 func (s *PrefixStore) Get(key string) (*KVPair, error) {
 	return s.s.Get(s.makeKey(key))
 }
@@ -57,26 +53,6 @@ func (s *PrefixStore) AtomicDelete(key string, previous *KVPair) (bool, error) {
 		return as.AtomicDelete(s.makeKey(key), previous)
 	}
 	return false, ErrCallNotSupported
-}
-
-func (s *PrefixStore) Watch(key string, stopCh <-chan struct{}) (<-chan *KVPair, error) {
-	return nil, ErrCallNotSupported
-}
-
-func (*PrefixStore) WatchTree(directory string, stopCh <-chan struct{}) (<-chan []*KVPair, error) {
-	return nil, ErrCallNotSupported
-}
-
-func (s *PrefixStore) NewLock(key string, options *LockOptions) (Locker, error) {
-	return nil, ErrCallNotSupported
-}
-
-func (*PrefixStore) List(directory string) ([]*KVPair, error) {
-	return nil, ErrCallNotSupported
-}
-
-func (*PrefixStore) DeleteTree(directory string) error {
-	return ErrCallNotSupported
 }
 
 func (s *PrefixStore) ListKeys(start string) ([]string, error) {

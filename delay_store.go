@@ -58,26 +58,6 @@ func (s *DelayStore) AtomicDelete(key string, previous *KVPair) (bool, error) {
 	return false, ErrCallNotSupported
 }
 
-func (s *DelayStore) Watch(key string, stopCh <-chan struct{}) (<-chan *KVPair, error) {
-	return nil, ErrCallNotSupported
-}
-
-func (*DelayStore) WatchTree(directory string, stopCh <-chan struct{}) (<-chan []*KVPair, error) {
-	return nil, ErrCallNotSupported
-}
-
-func (s *DelayStore) NewLock(key string, options *LockOptions) (Locker, error) {
-	return nil, ErrCallNotSupported
-}
-
-func (*DelayStore) List(directory string) ([]*KVPair, error) {
-	return nil, ErrCallNotSupported
-}
-
-func (*DelayStore) DeleteTree(directory string) error {
-	return ErrCallNotSupported
-}
-
 func (s *DelayStore) ListKeys(start string) ([]string, error) {
 	lister, ok := s.s.(OrderedStore)
 	if !ok {
