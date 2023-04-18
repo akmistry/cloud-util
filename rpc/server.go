@@ -2,6 +2,7 @@ package rpc
 
 import (
 	"context"
+	"errors"
 	"log"
 	"sync"
 
@@ -66,6 +67,17 @@ func (s *Server) getStore(name string) (*storeEntry, error) {
 	return e, nil
 }
 
+func makeGrpcError(err error) error {
+	if errors.Is(err, cloud.ErrKeyNotFound) {
+		return status.Error(codes.NotFound, err.Error())
+	} else if errors.Is(err, cloud.ErrKeyExists) {
+		return status.Error(codes.AlreadyExists, err.Error())
+	} else if errors.Is(err, cloud.ErrKeyModified) {
+		return status.Error(codes.Aborted, err.Error())
+	}
+	return err
+}
+
 func (s *Server) Get(ctx context.Context, req *pb.GetRequest) (*pb.GetResponse, error) {
 	store, err := s.getStore(req.DbName)
 	if err != nil {
@@ -74,10 +86,8 @@ func (s *Server) Get(ctx context.Context, req *pb.GetRequest) (*pb.GetResponse, 
 
 	log.Printf("Fetching key: %s", req.Key)
 	item, err := store.store.Get(req.Key)
-	if err == cloud.ErrKeyNotFound {
-		return nil, status.Error(codes.NotFound, "Key not found")
-	} else if err != nil {
-		return nil, err
+	if err != nil {
+		return nil, makeGrpcError(err)
 	}
 
 	return &pb.GetResponse{Val: item.Value}, nil
@@ -91,7 +101,7 @@ func (s *Server) Put(ctx context.Context, req *pb.PutRequest) (*pb.PutResponse, 
 
 	err = store.store.Put(req.Key, req.Val, nil)
 	if err != nil {
-		return nil, err
+		return nil, makeGrpcError(err)
 	}
 	return &pb.PutResponse{}, nil
 }
@@ -104,7 +114,7 @@ func (s *Server) Delete(ctx context.Context, req *pb.DeleteRequest) (*pb.DeleteR
 
 	err = store.store.Delete(req.Key)
 	if err != nil {
-		return nil, err
+		return nil, makeGrpcError(err)
 	}
 	return &pb.DeleteResponse{}, nil
 }
@@ -117,7 +127,7 @@ func (s *Server) AtomicPut(ctx context.Context, req *pb.AtomicPutRequest) (*pb.A
 
 	atomicStore, ok := store.store.(cloud.AtomicUnorderedStore)
 	if !ok {
-		return nil, status.Error(codes.InvalidArgument, "Store does not support atomic ops")
+		return nil, status.Error(codes.Unimplemented, "Store does not support atomic ops")
 	}
 
 	var previous *cloud.KVPair
@@ -129,18 +139,10 @@ func (s *Server) AtomicPut(ctx context.Context, req *pb.AtomicPutRequest) (*pb.A
 	}
 
 	_, _, err = atomicStore.AtomicPut(req.Key, req.Val, previous, nil)
-	switch err {
-	case nil:
-		return &pb.AtomicPutResponse{}, nil
-	case cloud.ErrKeyNotFound:
-		return nil, status.Error(codes.NotFound, "Key not found")
-	case cloud.ErrKeyExists:
-		return nil, status.Error(codes.AlreadyExists, "Key already exists")
-	case cloud.ErrKeyModified:
-		return nil, status.Error(codes.Aborted, "Key modified")
-	default:
-		return nil, err
+	if err != nil {
+		return nil, makeGrpcError(err)
 	}
+	return &pb.AtomicPutResponse{}, nil
 }
 
 func (s *Server) AtomicDelete(ctx context.Context, req *pb.AtomicDeleteRequest) (*pb.AtomicDeleteResponse, error) {
@@ -151,7 +153,7 @@ func (s *Server) AtomicDelete(ctx context.Context, req *pb.AtomicDeleteRequest) 
 
 	atomicStore, ok := store.store.(cloud.AtomicUnorderedStore)
 	if !ok {
-		return nil, status.Error(codes.InvalidArgument, "Store does not support atomic ops")
+		return nil, status.Error(codes.Unimplemented, "Store does not support atomic ops")
 	}
 
 	if req.OldVal == nil {
@@ -164,36 +166,30 @@ func (s *Server) AtomicDelete(ctx context.Context, req *pb.AtomicDeleteRequest) 
 	}
 
 	_, err = atomicStore.AtomicDelete(req.Key, previous)
-	switch err {
-	case nil:
-		return &pb.AtomicDeleteResponse{}, nil
-	case cloud.ErrKeyNotFound:
-		return nil, status.Error(codes.NotFound, "Key not found")
-	case cloud.ErrKeyModified:
-		return nil, status.Error(codes.Aborted, "Key modified")
-	default:
-		return nil, err
+	if err != nil {
+		return nil, makeGrpcError(err)
 	}
+	return &pb.AtomicDeleteResponse{}, nil
 }
 
-/*
 func (s *Server) List(ctx context.Context, req *pb.ListRequest) (*pb.ListResponse, error) {
 	store, err := s.getStore(req.DbName)
 	if err != nil {
 		return nil, err
 	}
 
-	keys, cursor, err := store.store.ListEx(req.StartKey, req.Cursor)
+	ordered, ok := store.store.(cloud.OrderedStore)
+	if !ok {
+		return nil, status.Error(codes.Unimplemented, "List not implemented")
+	}
+
+	keys, err := ordered.ListKeys(req.StartKey)
 	if err != nil {
-		return nil, err
+		return nil, makeGrpcError(err)
 	}
 
 	resp := &pb.ListResponse{
-		Cursor: cursor,
-	}
-	for _, k := range keys {
-		resp.Keys = append(resp.Keys, []byte(k))
+		Keys: keys,
 	}
 	return resp, nil
 }
-*/

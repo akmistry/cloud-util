@@ -57,6 +57,23 @@ func NewStore(addr, name string) (*Store, error) {
 	return &Store{name: name, client: pb.NewStoreClient(conn)}, nil
 }
 
+func translateError(err error) error {
+	switch status.Code(err) {
+	case codes.OK:
+		return nil
+	case codes.NotFound:
+		return cloud.ErrKeyNotFound
+	case codes.AlreadyExists:
+		return cloud.ErrKeyExists
+	case codes.Aborted:
+		return cloud.ErrKeyModified
+	case codes.Unimplemented:
+		return cloud.ErrCallNotSupported
+	default:
+		return err
+	}
+}
+
 func (s *Store) GetContext(ctx context.Context, key string) (*cloud.KVPair, error) {
 	req := &pb.GetRequest{
 		DbName: s.name,
@@ -64,11 +81,7 @@ func (s *Store) GetContext(ctx context.Context, key string) (*cloud.KVPair, erro
 	}
 	resp, err := s.client.Get(ctx, req)
 	if err != nil {
-		switch status.Code(err) {
-		case codes.NotFound:
-			return nil, cloud.ErrKeyNotFound
-		}
-		return nil, err
+		return nil, translateError(err)
 	} else if resp.Val == nil {
 		return nil, cloud.ErrKeyNotFound
 	}
@@ -97,7 +110,7 @@ func (s *Store) Put(key string, value []byte, options *cloud.WriteOptions) error
 		Val:    value,
 	}
 	_, err := s.client.Put(context.TODO(), req)
-	return err
+	return translateError(err)
 }
 
 func (s *Store) Delete(key string) error {
@@ -106,7 +119,7 @@ func (s *Store) Delete(key string) error {
 		Key:    key,
 	}
 	_, err := s.client.Delete(context.TODO(), req)
-	return err
+	return translateError(err)
 }
 
 // TODO: Implement.
@@ -120,22 +133,14 @@ func (s *Store) AtomicPut(key string, value []byte, previous *cloud.KVPair, opti
 		req.OldVal = previous.Value
 	}
 	_, err := s.client.AtomicPut(context.TODO(), req)
-	switch status.Code(err) {
-	case codes.OK:
-		updated := &cloud.KVPair{
-			Key:   key,
-			Value: value,
-		}
-		return true, updated, nil
-	case codes.NotFound:
-		return false, nil, cloud.ErrKeyNotFound
-	case codes.AlreadyExists:
-		return false, nil, cloud.ErrKeyExists
-	case codes.Aborted:
-		return false, nil, cloud.ErrKeyModified
-	default:
-		return false, nil, err
+	if err != nil {
+		return false, nil, translateError(err)
 	}
+	updated := &cloud.KVPair{
+		Key:   key,
+		Value: value,
+	}
+	return true, updated, nil
 }
 
 func (s *Store) AtomicDelete(key string, previous *cloud.KVPair) (bool, error) {
@@ -150,36 +155,20 @@ func (s *Store) AtomicDelete(key string, previous *cloud.KVPair) (bool, error) {
 		OldVal: previous.Value,
 	}
 	_, err := s.client.AtomicDelete(context.TODO(), req)
-	switch status.Code(err) {
-	case codes.OK:
-		return true, nil
-	case codes.NotFound:
-		return false, cloud.ErrKeyNotFound
-	case codes.Aborted:
-		return false, cloud.ErrKeyModified
-	default:
-		return false, err
+	if err != nil {
+		return false, translateError(err)
 	}
+	return true, nil
 }
 
-func (s *Store) ListEx(start string, cursor []byte) (keys []string, nextCursor []byte, err error) {
-	if len(start) > 0 && len(cursor) > 0 {
-		panic("start and cursor cannot both be set")
-	}
+func (s *Store) ListKeys(start string) (keys []string, err error) {
 	req := &pb.ListRequest{
 		DbName:   s.name,
 		StartKey: start,
-		Cursor:   cursor,
 	}
 	resp, err := s.client.List(context.TODO(), req)
 	if err != nil {
-		return nil, nil, err
+		return nil, translateError(err)
 	}
-	if len(resp.Keys) > 0 {
-		keys := make([]string, 0, len(resp.Keys))
-		for _, k := range resp.Keys {
-			keys = append(keys, k)
-		}
-	}
-	return keys, resp.Cursor, nil
+	return resp.Keys, nil
 }
