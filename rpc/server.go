@@ -2,7 +2,6 @@ package rpc
 
 import (
 	"context"
-	"io"
 	"log"
 	"sync"
 
@@ -34,20 +33,12 @@ func NewServer(f OpenStoreFunc) *Server {
 	}
 }
 
-type libkvCloser interface {
-	Close()
-}
-
 func (s *Server) Shutdown() {
 	s.lock.Lock()
 	defer s.lock.Unlock()
 
 	for _, store := range s.stores {
-		if c, ok := store.store.(io.Closer); ok {
-			c.Close()
-		} else if c, ok := store.store.(libkvCloser); ok {
-			c.Close()
-		}
+		cloud.DoStoreClose(store.store)
 	}
 	s.stores = nil
 }

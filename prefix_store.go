@@ -3,19 +3,16 @@ package cloud
 import (
 	"fmt"
 	"strings"
-
-	"github.com/akmistry/go-util/badgerkv"
-	"github.com/docker/libkv/store"
 )
 
 type PrefixStore struct {
-	s      store.Store
+	s      UnorderedStore
 	prefix string
 }
 
-var _ = (store.Store)((*PrefixStore)(nil))
+var _ = (UnorderedStore)((*PrefixStore)(nil))
 
-func NewPrefixStore(s store.Store, prefix string) *PrefixStore {
+func NewPrefixStore(s UnorderedStore, prefix string) *PrefixStore {
 	return &PrefixStore{
 		s:      s,
 		prefix: prefix,
@@ -32,7 +29,7 @@ func (s *PrefixStore) Close() {
 	// No-op, since it doesn't make sense to "close" a prefix.
 }
 
-func (s *PrefixStore) Get(key string) (*store.KVPair, error) {
+func (s *PrefixStore) Get(key string) (*KVPair, error) {
 	return s.s.Get(s.makeKey(key))
 }
 
@@ -40,7 +37,7 @@ func (s *PrefixStore) Exists(key string) (bool, error) {
 	return s.s.Exists(s.makeKey(key))
 }
 
-func (s *PrefixStore) Put(key string, value []byte, options *store.WriteOptions) error {
+func (s *PrefixStore) Put(key string, value []byte, options *WriteOptions) error {
 	return s.s.Put(s.makeKey(key), value, options)
 }
 
@@ -48,38 +45,44 @@ func (s *PrefixStore) Delete(key string) error {
 	return s.s.Delete(s.makeKey(key))
 }
 
-func (s *PrefixStore) AtomicPut(key string, value []byte, previous *store.KVPair, options *store.WriteOptions) (bool, *store.KVPair, error) {
-	return s.s.AtomicPut(s.makeKey(key), value, previous, options)
+func (s *PrefixStore) AtomicPut(key string, value []byte, previous *KVPair, options *WriteOptions) (bool, *KVPair, error) {
+	if as, ok := s.s.(AtomicUnorderedStore); ok {
+		return as.AtomicPut(s.makeKey(key), value, previous, options)
+	}
+	return false, nil, ErrCallNotSupported
 }
 
-func (s *PrefixStore) AtomicDelete(key string, previous *store.KVPair) (bool, error) {
-	return s.s.AtomicDelete(s.makeKey(key), previous)
+func (s *PrefixStore) AtomicDelete(key string, previous *KVPair) (bool, error) {
+	if as, ok := s.s.(AtomicUnorderedStore); ok {
+		return as.AtomicDelete(s.makeKey(key), previous)
+	}
+	return false, ErrCallNotSupported
 }
 
-func (s *PrefixStore) Watch(key string, stopCh <-chan struct{}) (<-chan *store.KVPair, error) {
-	return s.s.Watch(s.makeKey(key), stopCh)
+func (s *PrefixStore) Watch(key string, stopCh <-chan struct{}) (<-chan *KVPair, error) {
+	return nil, ErrCallNotSupported
 }
 
-func (*PrefixStore) WatchTree(directory string, stopCh <-chan struct{}) (<-chan []*store.KVPair, error) {
-	return nil, store.ErrCallNotSupported
+func (*PrefixStore) WatchTree(directory string, stopCh <-chan struct{}) (<-chan []*KVPair, error) {
+	return nil, ErrCallNotSupported
 }
 
-func (s *PrefixStore) NewLock(key string, options *store.LockOptions) (store.Locker, error) {
-	return s.s.NewLock(s.makeKey(key), options)
+func (s *PrefixStore) NewLock(key string, options *LockOptions) (Locker, error) {
+	return nil, ErrCallNotSupported
 }
 
-func (*PrefixStore) List(directory string) ([]*store.KVPair, error) {
-	return nil, store.ErrCallNotSupported
+func (*PrefixStore) List(directory string) ([]*KVPair, error) {
+	return nil, ErrCallNotSupported
 }
 
 func (*PrefixStore) DeleteTree(directory string) error {
-	return store.ErrCallNotSupported
+	return ErrCallNotSupported
 }
 
 func (s *PrefixStore) ListKeys(start string) ([]string, error) {
-	lister, ok := s.s.(badgerkv.Lister)
+	lister, ok := s.s.(OrderedStore)
 	if !ok {
-		return nil, store.ErrCallNotSupported
+		return nil, ErrCallNotSupported
 	}
 
 	startKey := s.makeKey(start)

@@ -2,19 +2,16 @@ package cloud
 
 import (
 	"time"
-
-	"github.com/akmistry/go-util/badgerkv"
-	"github.com/docker/libkv/store"
 )
 
 type DelayStore struct {
-	s     store.Store
+	s     UnorderedStore
 	delay time.Duration
 }
 
-var _ = (store.Store)((*DelayStore)(nil))
+var _ = (UnorderedStore)((*DelayStore)(nil))
 
-func NewDelayStore(s store.Store, delay time.Duration) *DelayStore {
+func NewDelayStore(s UnorderedStore, delay time.Duration) *DelayStore {
 	return &DelayStore{
 		s:     s,
 		delay: delay,
@@ -22,10 +19,10 @@ func NewDelayStore(s store.Store, delay time.Duration) *DelayStore {
 }
 
 func (s *DelayStore) Close() {
-	s.s.Close()
+	DoStoreClose(s.s)
 }
 
-func (s *DelayStore) Get(key string) (*store.KVPair, error) {
+func (s *DelayStore) Get(key string) (*KVPair, error) {
 	time.Sleep(s.delay)
 	return s.s.Get(key)
 }
@@ -35,7 +32,7 @@ func (s *DelayStore) Exists(key string) (bool, error) {
 	return s.s.Exists(key)
 }
 
-func (s *DelayStore) Put(key string, value []byte, options *store.WriteOptions) error {
+func (s *DelayStore) Put(key string, value []byte, options *WriteOptions) error {
 	time.Sleep(s.delay)
 	return s.s.Put(key, value, options)
 }
@@ -45,42 +42,46 @@ func (s *DelayStore) Delete(key string) error {
 	return s.s.Delete(key)
 }
 
-func (s *DelayStore) AtomicPut(key string, value []byte, previous *store.KVPair, options *store.WriteOptions) (bool, *store.KVPair, error) {
-	time.Sleep(s.delay)
-	return s.s.AtomicPut(key, value, previous, options)
+func (s *DelayStore) AtomicPut(key string, value []byte, previous *KVPair, options *WriteOptions) (bool, *KVPair, error) {
+	if as, ok := s.s.(AtomicUnorderedStore); ok {
+		time.Sleep(s.delay)
+		return as.AtomicPut(key, value, previous, options)
+	}
+	return false, nil, ErrCallNotSupported
 }
 
-func (s *DelayStore) AtomicDelete(key string, previous *store.KVPair) (bool, error) {
-	time.Sleep(s.delay)
-	return s.s.AtomicDelete(key, previous)
+func (s *DelayStore) AtomicDelete(key string, previous *KVPair) (bool, error) {
+	if as, ok := s.s.(AtomicUnorderedStore); ok {
+		time.Sleep(s.delay)
+		return as.AtomicDelete(key, previous)
+	}
+	return false, ErrCallNotSupported
 }
 
-func (s *DelayStore) Watch(key string, stopCh <-chan struct{}) (<-chan *store.KVPair, error) {
-	time.Sleep(s.delay)
-	return s.s.Watch(key, stopCh)
+func (s *DelayStore) Watch(key string, stopCh <-chan struct{}) (<-chan *KVPair, error) {
+	return nil, ErrCallNotSupported
 }
 
-func (*DelayStore) WatchTree(directory string, stopCh <-chan struct{}) (<-chan []*store.KVPair, error) {
-	return nil, store.ErrCallNotSupported
+func (*DelayStore) WatchTree(directory string, stopCh <-chan struct{}) (<-chan []*KVPair, error) {
+	return nil, ErrCallNotSupported
 }
 
-func (s *DelayStore) NewLock(key string, options *store.LockOptions) (store.Locker, error) {
-	time.Sleep(s.delay)
-	return s.s.NewLock(key, options)
+func (s *DelayStore) NewLock(key string, options *LockOptions) (Locker, error) {
+	return nil, ErrCallNotSupported
 }
 
-func (*DelayStore) List(directory string) ([]*store.KVPair, error) {
-	return nil, store.ErrCallNotSupported
+func (*DelayStore) List(directory string) ([]*KVPair, error) {
+	return nil, ErrCallNotSupported
 }
 
 func (*DelayStore) DeleteTree(directory string) error {
-	return store.ErrCallNotSupported
+	return ErrCallNotSupported
 }
 
 func (s *DelayStore) ListKeys(start string) ([]string, error) {
-	lister, ok := s.s.(badgerkv.Lister)
+	lister, ok := s.s.(OrderedStore)
 	if !ok {
-		return nil, store.ErrCallNotSupported
+		return nil, ErrCallNotSupported
 	}
 	time.Sleep(s.delay)
 	return lister.ListKeys(start)
