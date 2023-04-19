@@ -57,11 +57,17 @@ func checkNotExists(t *testing.T, s cloud.UnorderedStore, key string) {
 	}
 }
 
-func TestUnorderedStore(t *testing.T, s cloud.UnorderedStore) {
+func PopulateTestItems(t *testing.T, s cloud.UnorderedStore, count int) ([]string, map[string][]byte) {
 	kv := make(map[string][]byte)
-	for i := 0; i < NumTestItems; i++ {
+	for i := 0; i < count; i++ {
 		key := fmt.Sprintf("%020d", rand.Int())
-		kv[key] = []byte(key)
+		value := []byte(key)
+		kv[key] = value
+
+		err := s.Put(key, value, nil)
+		if err != nil {
+			t.Errorf("Put(%s) error = %v", key, err)
+		}
 	}
 	sortedKeys := make([]string, 0, len(kv))
 	for key := range kv {
@@ -69,13 +75,12 @@ func TestUnorderedStore(t *testing.T, s cloud.UnorderedStore) {
 	}
 	sort.Strings(sortedKeys)
 
-	// Insert all keys, in random-ish order
-	for key, value := range kv {
-		err := s.Put(key, value, nil)
-		if err != nil {
-			t.Errorf("Put(%s) error = %v", key, err)
-		}
-	}
+	return sortedKeys, kv
+}
+
+func TestUnorderedStore(t *testing.T, s cloud.UnorderedStore) {
+	// Generate and insert items
+	sortedKeys, kv := PopulateTestItems(t, s, NumTestItems)
 
 	// Check for existence and get
 	for key, value := range kv {
@@ -104,22 +109,8 @@ func TestUnorderedStore(t *testing.T, s cloud.UnorderedStore) {
 func TestListKeys(t *testing.T, s cloud.OrderedStore) {
 	const ListIterations = 1000
 
-	kv := make(map[string][]byte)
-	for i := 0; i < NumTestItems; i++ {
-		key := fmt.Sprintf("%020d", rand.Int())
-		value := []byte(key)
-		kv[key] = value
-
-		err := s.Put(key, value, nil)
-		if err != nil {
-			t.Errorf("Put(%s) error = %v", key, err)
-		}
-	}
-	sortedKeys := make([]string, 0, len(kv))
-	for key := range kv {
-		sortedKeys = append(sortedKeys, key)
-	}
-	sort.Strings(sortedKeys)
+	// Generate and insert items
+	sortedKeys, _ := PopulateTestItems(t, s, NumTestItems)
 
 	for i := 0; i < ListIterations; i++ {
 		startIndex := rand.Intn(len(sortedKeys))
