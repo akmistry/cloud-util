@@ -8,10 +8,11 @@ import (
 
 // Errors mirrored from libkv
 var (
-	ErrKeyNotFound      = store.ErrKeyNotFound
-	ErrKeyExists        = store.ErrKeyExists
-	ErrKeyModified      = store.ErrKeyModified
-	ErrCallNotSupported = store.ErrCallNotSupported
+	ErrKeyNotFound          = store.ErrKeyNotFound
+	ErrKeyExists            = store.ErrKeyExists
+	ErrKeyModified          = store.ErrKeyModified
+	ErrCallNotSupported     = store.ErrCallNotSupported
+	ErrPreviousNotSpecified = store.ErrPreviousNotSpecified
 )
 
 // Types mirrored from libkv
