@@ -39,10 +39,18 @@ type AtomicUnorderedStore interface {
 	AtomicDelete(key string, previous *KVPair) (bool, error)
 }
 
+type KeysLister interface {
+	ListKeys(start string) ([]string, error)
+}
+
 type OrderedStore interface {
 	UnorderedStore
+	KeysLister
+}
 
-	ListKeys(start string) ([]string, error)
+type AtomicOrderedStore interface {
+	AtomicUnorderedStore
+	KeysLister
 }
 
 func DoStoreClose(s UnorderedStore) error {

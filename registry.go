@@ -2,6 +2,7 @@ package cloud
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 )
@@ -41,4 +42,17 @@ func OpenUnorderedStore(path string) (UnorderedStore, error) {
 		return nil, ErrUnrecognisedScheme
 	}
 	return fn(path)
+}
+
+func OpenAtomicOrderedStore(path string) (AtomicOrderedStore, error) {
+	us, err := OpenUnorderedStore(path)
+	if err != nil {
+		return nil, err
+	}
+
+	aos, ok := us.(AtomicOrderedStore)
+	if !ok {
+		return nil, fmt.Errorf("cloud: '%s' does not implement AtomicOrderedStore", path)
+	}
+	return aos, nil
 }
