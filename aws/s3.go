@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net/url"
 	"os"
 	"time"
 
@@ -30,7 +31,30 @@ var (
 
 const (
 	maxPendingFetches = 512
+
+	s3Scheme = "s3"
 )
+
+func init() {
+	cloud.RegisterBlobStoreScheme(s3Scheme, openS3BlobStore)
+}
+
+// URL format: s3://<bucket_name>
+func openS3BlobStore(path string) (cloud.BlobStore, error) {
+	u, err := url.Parse(path)
+	if err != nil {
+		return nil, err
+	}
+	if u.Scheme != s3Scheme {
+		return nil, fmt.Errorf("cloud/aws.s3: unexpected scheme: %s", u.Scheme)
+	} else if u.Host == "" {
+		return nil, fmt.Errorf("cloud/aws.s3: empty bucket name")
+	} else if u.Path != "" {
+		return nil, fmt.Errorf("cloud/aws.s3: path must be empty")
+	}
+
+	return NewDefaultS3Store(u.Host), nil
+}
 
 type S3Store struct {
 	session     *session.Session

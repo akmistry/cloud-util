@@ -8,23 +8,27 @@ import (
 )
 
 type StoreFunc func(path string) (UnorderedStore, error)
+type BlobStoreFunc func(path string) (BlobStore, error)
 
 var (
 	ErrUnrecognisedScheme = errors.New("cloud: unrecognised store scheme")
 	ErrInvalidFormat      = errors.New("cloud: invalid store path format")
 
-	storeSchemeMap map[string]StoreFunc
-	schemeLock     sync.Mutex
+	storeSchemeMap     = make(map[string]StoreFunc)
+	blobStoreSchemeMap = make(map[string]BlobStoreFunc)
+	schemeLock         sync.Mutex
 )
 
 func RegisterStoreScheme(scheme string, fn StoreFunc) {
 	schemeLock.Lock()
-	defer schemeLock.Unlock()
-
-	if storeSchemeMap == nil {
-		storeSchemeMap = make(map[string]StoreFunc)
-	}
 	storeSchemeMap[scheme] = fn
+	schemeLock.Unlock()
+}
+
+func RegisterBlobStoreScheme(scheme string, fn BlobStoreFunc) {
+	schemeLock.Lock()
+	blobStoreSchemeMap[scheme] = fn
+	schemeLock.Unlock()
 }
 
 func OpenUnorderedStore(path string) (UnorderedStore, error) {
@@ -35,9 +39,9 @@ func OpenUnorderedStore(path string) (UnorderedStore, error) {
 	scheme := path[:i]
 
 	schemeLock.Lock()
-	defer schemeLock.Unlock()
-
 	fn := storeSchemeMap[scheme]
+	schemeLock.Unlock()
+
 	if fn == nil {
 		return nil, ErrUnrecognisedScheme
 	}
@@ -55,4 +59,21 @@ func OpenAtomicOrderedStore(path string) (AtomicOrderedStore, error) {
 		return nil, fmt.Errorf("cloud: '%s' does not implement AtomicOrderedStore", path)
 	}
 	return aos, nil
+}
+
+func OpenBlobStore(path string) (BlobStore, error) {
+	i := strings.IndexByte(path, ':')
+	if i < 0 {
+		return nil, ErrInvalidFormat
+	}
+	scheme := path[:i]
+
+	schemeLock.Lock()
+	fn := blobStoreSchemeMap[scheme]
+	schemeLock.Unlock()
+
+	if fn == nil {
+		return nil, ErrUnrecognisedScheme
+	}
+	return fn(path)
 }

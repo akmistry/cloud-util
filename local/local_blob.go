@@ -2,8 +2,9 @@ package local
 
 import (
 	"errors"
+	"fmt"
 	"io/fs"
-	"log"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,9 +15,39 @@ import (
 const (
 	// Use distinct prefixes for temp and actual blob files, so that old temp
 	// files can be clean up.
-	tempFilePrefix = "temp-"
-	blobPrefix     = "blob-"
+	tempFilePrefix = "t-"
+	blobPrefix     = "b-"
+
+	dirScheme = "file"
 )
+
+func init() {
+	cloud.RegisterBlobStoreScheme(dirScheme, openDirBlobStore)
+}
+
+// URL format: file://<dir>[/], where dir is either an absolute or relative path.
+// Example:
+//
+//	file:///home/myhome/mydir -> /home/myhome/mydir (note the 3 /'s)
+//	file://mydir -> ./mydir (relative to current directory)
+func openDirBlobStore(path string) (cloud.BlobStore, error) {
+	u, err := url.Parse(path)
+	if err != nil {
+		return nil, err
+	}
+	if u.Scheme != dirScheme {
+		return nil, fmt.Errorf("cloud/local: unexpected scheme: %s", u.Scheme)
+	} else if u.RawPath[0] != '/' {
+		return nil, fmt.Errorf("cloud/local: invalid path: %s", u.Path)
+	}
+
+	name := u.RawPath
+	if u.Host != "" {
+		name = filepath.Join(u.Host, u.RawPath)
+	}
+
+	return NewDirBlobStore(name)
+}
 
 type DirBlobStore struct {
 	dir string
@@ -30,29 +61,8 @@ func NewDirBlobStore(dir string) (*DirBlobStore, error) {
 		return nil, err
 	}
 
-	// Erase temp files
-	filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
-		if path == dir {
-			return nil
-		} else if d.IsDir() {
-			return fs.SkipDir
-		} else if err != nil {
-			log.Printf("Error walking path %s: %v", path, err)
-			return nil
-		}
-
-		if !strings.HasPrefix(d.Name(), tempFilePrefix) {
-			return nil
-		}
-
-		err = os.Remove(path)
-		if err != nil {
-			// Non-fatal, since unreferenced temp files only consume space and don't
-			// affect semantics.
-			log.Printf("Error removing old temp file %s: %v", path, err)
-		}
-		return nil
-	})
+	// Intentionally don't delete any existsing temp files. They could be created
+	// by another process sharing the same store.
 
 	return &DirBlobStore{
 		dir: dir,
@@ -68,8 +78,8 @@ func (s *DirBlobStore) makeFilePath(key string) string {
 func (s *DirBlobStore) Size(key string) (int64, error) {
 	path := s.makeFilePath(key)
 	fi, err := os.Stat(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return 0, os.ErrNotExist
+	if errors.Is(err, fs.ErrNotExist) {
+		return 0, fs.ErrNotExist
 	} else if err != nil {
 		return 0, err
 	}
@@ -88,8 +98,8 @@ func (r *fileBlobReader) Size() int64 {
 func (s *DirBlobStore) Get(key string) (cloud.GetReader, error) {
 	path := s.makeFilePath(key)
 	f, err := os.Open(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil, os.ErrNotExist
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, fs.ErrNotExist
 	} else if err != nil {
 		return nil, err
 	}
@@ -115,7 +125,11 @@ type fileBlobWriter struct {
 func (w *fileBlobWriter) Close() error {
 	defer os.Remove(w.File.Name())
 
-	err := w.File.Close()
+	err := w.File.Sync()
+	if err != nil {
+		return err
+	}
+	err = w.File.Close()
 	if err != nil {
 		return err
 	}
@@ -154,8 +168,8 @@ func (s *DirBlobStore) Put(key string) (cloud.PutWriter, error) {
 func (s *DirBlobStore) Delete(key string) error {
 	path := s.makeFilePath(key)
 	err := os.Remove(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return os.ErrNotExist
+	if errors.Is(err, fs.ErrNotExist) {
+		return fs.ErrNotExist
 	}
 	return err
 }
