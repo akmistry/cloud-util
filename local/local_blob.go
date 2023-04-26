@@ -35,15 +35,16 @@ func openDirBlobStore(path string) (cloud.BlobStore, error) {
 	if err != nil {
 		return nil, err
 	}
+	p := u.EscapedPath()
 	if u.Scheme != dirScheme {
 		return nil, fmt.Errorf("cloud/local: unexpected scheme: %s", u.Scheme)
-	} else if u.RawPath[0] != '/' {
-		return nil, fmt.Errorf("cloud/local: invalid path: %s", u.Path)
+	} else if p[0] != '/' {
+		return nil, fmt.Errorf("cloud/local: invalid path: %s", p)
 	}
 
-	name := u.RawPath
+	name := p
 	if u.Host != "" {
-		name = filepath.Join(u.Host, u.RawPath)
+		name = filepath.Join(u.Host, name)
 	}
 
 	return NewDirBlobStore(name)
