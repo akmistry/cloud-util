@@ -128,6 +128,8 @@ func (w *fileBlobWriter) Close() error {
 
 	err := w.File.Sync()
 	if err != nil {
+		// Close the file on sync error to avoid an FD leak
+		w.File.Close()
 		return err
 	}
 	err = w.File.Close()
