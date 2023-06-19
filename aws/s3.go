@@ -63,17 +63,24 @@ type S3Store struct {
 }
 
 func NewDefaultS3Store(bucket string) *S3Store {
-	return NewS3Store(*Endpoint, *AccessId, *AccessSecret, *Region, bucket)
+	return NewS3Store("", "", "", "", bucket)
 }
 
 func NewS3Store(endpoint, accessKey, secret, region, bucket string) *S3Store {
-	session, err := session.NewSession(&aws.Config{
-		Endpoint:         aws.String(endpoint),
-		Credentials:      credentials.NewStaticCredentials(accessKey, secret, ""),
-		Region:           aws.String(region),
+	cfg := &aws.Config{
 		DisableSSL:       aws.Bool(*flagS3DisableTls),
 		S3ForcePathStyle: aws.Bool(true),
-	})
+	}
+	if region != "" {
+		cfg.Region = aws.String(region)
+	}
+	if endpoint != "" {
+		cfg.Endpoint = aws.String(endpoint)
+	}
+	if accessKey != "" && secret != "" {
+		cfg.Credentials = credentials.NewStaticCredentials(accessKey, secret, "")
+	}
+	session, err := session.NewSession(cfg)
 	if err != nil {
 		panic(err)
 	}
