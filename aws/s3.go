@@ -11,9 +11,11 @@ import (
 	"os"
 	"time"
 
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/credentials"
-	"github.com/aws/aws-sdk-go/aws/session"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
+
 	"gocloud.dev/blob"
 	"gocloud.dev/blob/s3blob"
 	"gocloud.dev/gcerrors"
@@ -57,7 +59,7 @@ func openS3BlobStore(path string) (cloud.BlobStore, error) {
 }
 
 type S3Store struct {
-	session     *session.Session
+	client      *s3.Client
 	bucket      *blob.Bucket
 	pendingSema *semaphore.Weighted
 }
@@ -67,31 +69,46 @@ func NewDefaultS3Store(bucket string) *S3Store {
 }
 
 func NewS3Store(endpoint, accessKey, secret, region, bucket string) *S3Store {
-	cfg := &aws.Config{
-		DisableSSL:       aws.Bool(*flagS3DisableTls),
-		S3ForcePathStyle: aws.Bool(true),
-	}
+	var optFns []func(*config.LoadOptions) error
 	if region != "" {
-		cfg.Region = aws.String(region)
+		optFns = append(optFns, config.WithRegion(region))
 	}
 	if endpoint != "" {
-		cfg.Endpoint = aws.String(endpoint)
+		optFns = append(optFns, config.WithEndpointResolver(aws.EndpointResolverFunc(
+			func(service, region string) (aws.Endpoint, error) {
+				return aws.Endpoint{URL: endpoint}, nil
+			})))
 	}
 	if accessKey != "" && secret != "" {
-		cfg.Credentials = credentials.NewStaticCredentials(accessKey, secret, "")
+		optFns = append(optFns, config.WithCredentialsProvider(credentials.StaticCredentialsProvider{
+			Value: aws.Credentials{
+				AccessKeyID:     accessKey,
+				SecretAccessKey: secret,
+			},
+		}))
 	}
-	session, err := session.NewSession(cfg)
+
+	cfg, err := config.LoadDefaultConfig(context.TODO(), optFns...)
 	if err != nil {
 		panic(err)
 	}
 
-	blobBucket, err := s3blob.OpenBucket(context.TODO(), session, bucket, nil)
+	//cfg := &aws.Config{
+	//	DisableSSL:       aws.Bool(*flagS3DisableTls),
+	//	S3ForcePathStyle: aws.Bool(true),
+	//}
+
+	client := s3.NewFromConfig(cfg, func(opts *s3.Options) {
+		opts.UsePathStyle = true
+	})
+
+	blobBucket, err := s3blob.OpenBucketV2(context.TODO(), client, bucket, nil)
 	if err != nil {
 		panic(err)
 	}
 
 	return &S3Store{
-		session:     session,
+		client:      client,
 		bucket:      blobBucket,
 		pendingSema: semaphore.NewWeighted(maxPendingFetches),
 	}
