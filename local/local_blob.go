@@ -4,10 +4,13 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"golang.org/x/sys/unix"
 
 	"github.com/akmistry/cloud-util"
 )
@@ -90,10 +93,31 @@ func (s *DirBlobStore) Size(key string) (int64, error) {
 type fileBlobReader struct {
 	*os.File
 	size int64
+
+	mmaps [][]byte
+}
+
+func (r *fileBlobReader) Close() error {
+	for _, m := range r.mmaps {
+		err := unix.Munmap(m)
+		if err != nil {
+			log.Printf("cloud/local: Munmap error: %v", err)
+		}
+	}
+	r.mmaps = nil
+	return r.File.Close()
 }
 
 func (r *fileBlobReader) Size() int64 {
 	return r.size
+}
+
+func (r *fileBlobReader) MemMap(offset int64, length int) ([]byte, error) {
+	mmap, err := unix.Mmap(int(r.File.Fd()), offset, length, unix.PROT_READ, unix.MAP_SHARED)
+	if len(mmap) > 0 {
+		r.mmaps = append(r.mmaps, mmap)
+	}
+	return mmap, err
 }
 
 func (s *DirBlobStore) Get(key string) (cloud.GetReader, error) {
