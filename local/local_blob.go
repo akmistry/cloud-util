@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"golang.org/x/exp/mmap"
 	"golang.org/x/sys/unix"
 
 	"github.com/akmistry/cloud-util"
@@ -95,16 +94,7 @@ type fileBlobReader struct {
 	*os.File
 	size int64
 
-	readerMmap *mmap.ReaderAt
-
 	mmaps [][]byte
-}
-
-func (r *fileBlobReader) ReadAt(p []byte, off int64) (int, error) {
-	if r.readerMmap != nil {
-		return r.readerMmap.ReadAt(p, off)
-	}
-	return r.File.ReadAt(p, off)
 }
 
 func (r *fileBlobReader) Close() error {
@@ -115,9 +105,6 @@ func (r *fileBlobReader) Close() error {
 		}
 	}
 	r.mmaps = nil
-	if r.readerMmap != nil {
-		r.readerMmap.Close()
-	}
 	return r.File.Close()
 }
 
@@ -148,16 +135,9 @@ func (s *DirBlobStore) Get(key string) (cloud.GetReader, error) {
 		return nil, err
 	}
 
-	// Mmap'ing the reader is purely an optimisation to avoid a syscall on read.
-	mapReader, err := mmap.Open(path)
-	if err != nil {
-		log.Printf("cloud/local: Error mmaping file %s: %v", path, err)
-	}
-
 	return &fileBlobReader{
-		File:       f,
-		size:       fi.Size(),
-		readerMmap: mapReader,
+		File: f,
+		size: fi.Size(),
 	}, nil
 
 }
