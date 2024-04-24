@@ -1,18 +1,19 @@
-package cloud
+package store_util
 
 import (
-	"fmt"
 	"strings"
+
+	"github.com/akmistry/cloud-util"
 )
 
 type PrefixStore struct {
-	s      UnorderedStore
+	s      cloud.UnorderedStore
 	prefix string
 }
 
-var _ = (UnorderedStore)((*PrefixStore)(nil))
+var _ = (cloud.UnorderedStore)((*PrefixStore)(nil))
 
-func NewPrefixStore(s UnorderedStore, prefix string) *PrefixStore {
+func NewPrefixStore(s cloud.UnorderedStore, prefix string) *PrefixStore {
 	return &PrefixStore{
 		s:      s,
 		prefix: prefix,
@@ -20,12 +21,10 @@ func NewPrefixStore(s UnorderedStore, prefix string) *PrefixStore {
 }
 
 func (s *PrefixStore) makeKey(key string) string {
-	k := s.prefix + key
-	fmt.Println("Making key: ", k)
-	return k
+	return s.prefix + key
 }
 
-func (s *PrefixStore) Get(key string) (*KVPair, error) {
+func (s *PrefixStore) Get(key string) (*cloud.KVPair, error) {
 	return s.s.Get(s.makeKey(key))
 }
 
@@ -33,7 +32,7 @@ func (s *PrefixStore) Exists(key string) (bool, error) {
 	return s.s.Exists(s.makeKey(key))
 }
 
-func (s *PrefixStore) Put(key string, value []byte, options *WriteOptions) error {
+func (s *PrefixStore) Put(key string, value []byte, options *cloud.WriteOptions) error {
 	return s.s.Put(s.makeKey(key), value, options)
 }
 
@@ -41,24 +40,24 @@ func (s *PrefixStore) Delete(key string) error {
 	return s.s.Delete(s.makeKey(key))
 }
 
-func (s *PrefixStore) AtomicPut(key string, value []byte, previous *KVPair, options *WriteOptions) (bool, *KVPair, error) {
-	if as, ok := s.s.(AtomicUnorderedStore); ok {
+func (s *PrefixStore) AtomicPut(key string, value []byte, previous *cloud.KVPair, options *cloud.WriteOptions) (bool, *cloud.KVPair, error) {
+	if as, ok := s.s.(cloud.AtomicUnorderedStore); ok {
 		return as.AtomicPut(s.makeKey(key), value, previous, options)
 	}
-	return false, nil, ErrCallNotSupported
+	return false, nil, cloud.ErrCallNotSupported
 }
 
-func (s *PrefixStore) AtomicDelete(key string, previous *KVPair) (bool, error) {
-	if as, ok := s.s.(AtomicUnorderedStore); ok {
+func (s *PrefixStore) AtomicDelete(key string, previous *cloud.KVPair) (bool, error) {
+	if as, ok := s.s.(cloud.AtomicUnorderedStore); ok {
 		return as.AtomicDelete(s.makeKey(key), previous)
 	}
-	return false, ErrCallNotSupported
+	return false, cloud.ErrCallNotSupported
 }
 
 func (s *PrefixStore) ListKeys(start string) ([]string, error) {
-	lister, ok := s.s.(OrderedStore)
+	lister, ok := s.s.(cloud.OrderedStore)
 	if !ok {
-		return nil, ErrCallNotSupported
+		return nil, cloud.ErrCallNotSupported
 	}
 
 	startKey := s.makeKey(start)

@@ -1,13 +1,17 @@
-package cloud
+package blob_util
+
+import (
+	"github.com/akmistry/cloud-util"
+)
 
 type PrefixBlobStore struct {
-	bs     BlobStore
+	bs     cloud.BlobStore
 	prefix string
 }
 
-var _ = (BlobStore)((*PrefixBlobStore)(nil))
+var _ = (cloud.BlobStore)((*PrefixBlobStore)(nil))
 
-func NewPrefixBlobStore(bs BlobStore, prefix string) *PrefixBlobStore {
+func NewPrefixBlobStore(bs cloud.BlobStore, prefix string) *PrefixBlobStore {
 	return &PrefixBlobStore{
 		bs:     bs,
 		prefix: prefix,
@@ -22,11 +26,11 @@ func (s *PrefixBlobStore) Size(key string) (int64, error) {
 	return s.bs.Size(s.makeKey(key))
 }
 
-func (s *PrefixBlobStore) Get(key string) (GetReader, error) {
+func (s *PrefixBlobStore) Get(key string) (cloud.GetReader, error) {
 	return s.bs.Get(s.makeKey(key))
 }
 
-func (s *PrefixBlobStore) Put(key string) (PutWriter, error) {
+func (s *PrefixBlobStore) Put(key string) (cloud.PutWriter, error) {
 	return s.bs.Put(s.makeKey(key))
 }
 
