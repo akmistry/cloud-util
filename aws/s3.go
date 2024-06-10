@@ -3,7 +3,6 @@ package aws
 import (
 	"context"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"log"
@@ -27,8 +26,6 @@ import (
 
 var (
 	ErrWriteCanceled = errors.New("cloud: blob write canceled")
-
-	flagS3DisableTls = flag.Bool("s3-disable-tls", false, "Disable TLS for S3")
 )
 
 const (
@@ -92,11 +89,6 @@ func NewS3Store(endpoint, accessKey, secret, region, bucket string) *S3Store {
 	if err != nil {
 		panic(err)
 	}
-
-	//cfg := &aws.Config{
-	//	DisableSSL:       aws.Bool(*flagS3DisableTls),
-	//	S3ForcePathStyle: aws.Bool(true),
-	//}
 
 	client := s3.NewFromConfig(cfg, func(opts *s3.Options) {
 		opts.UsePathStyle = true
